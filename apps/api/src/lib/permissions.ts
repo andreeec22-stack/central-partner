@@ -73,6 +73,15 @@ export function canEditTask(user: ScopeUser, task: TaskRef): boolean {
   return task.assignedToId === user.id || task.createdById === user.id;
 }
 
+// Comment on / attach files to a task: the people working on it — its
+// department, its assignee and creator — and ADMINs. A JEFE_AREA's visibility
+// grant over another department stays read-only; VIEWERs never write.
+export function canContribute(user: ScopeUser, task: TaskRef): boolean {
+  if (user.role === 'ADMIN') return true;
+  if (isReadOnlyRole(user.role)) return false;
+  return user.departmentId === task.departmentId || task.assignedToId === user.id || task.createdById === user.id;
+}
+
 // DELETE permission: Creator | JEFE_AREA (own department) | ADMIN.
 export function canDeleteTask(user: ScopeUser, task: TaskRef): boolean {
   if (user.role === 'ADMIN') return true;

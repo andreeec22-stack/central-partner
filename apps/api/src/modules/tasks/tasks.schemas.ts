@@ -86,3 +86,9 @@ export const bulkUpdateSchema = z.object({
 export type BulkUpdateInput = z.infer<typeof bulkUpdateSchema>;
 
 export const addDependencySchema = z.object({ dependsOnTaskId: z.string().uuid() });
+
+export const commentSchema = z.object({
+  content: z.string().trim().min(1, 'Comment cannot be empty').max(5000, 'Comments are limited to 5000 characters'),
+});
+
+export const downloadQuerySchema = z.object({ format: z.enum(['redirect', 'json']).default('redirect') });

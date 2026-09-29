@@ -36,6 +36,27 @@ export const ACTIVITY_LABEL: Record<string, string> = {
   TASK_DELETED: 'eliminó',
   TASK_DEPENDENCY_ADDED: 'añadió una dependencia a',
   TASK_DEPENDENCY_REMOVED: 'quitó una dependencia de',
+  COMMENT_ADDED: 'comentó en',
+  COMMENT_EDITED: 'editó un comentario en',
+  COMMENT_DELETED: 'borró un comentario en',
+  FILE_UPLOADED: 'adjuntó un archivo a',
+  FILE_DELETED: 'eliminó un archivo de',
+};
+
+// Field names in activity diffs.
+export const FIELD_LABEL: Record<string, string> = {
+  title: 'título',
+  description: 'descripción',
+  status: 'estado',
+  priority: 'prioridad',
+  progress: 'progreso',
+  assignedToId: 'responsable',
+  departmentId: 'departamento',
+  dueDate: 'fecha límite',
+  kpiTarget: 'meta KPI',
+  kpiActual: 'resultado KPI',
+  blockReason: 'motivo de bloqueo',
+  parentTaskId: 'tarea padre',
 };
 
 export const PROGRESS_STEPS = [0, 25, 50, 75, 100] as const;

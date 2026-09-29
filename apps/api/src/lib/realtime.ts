@@ -23,6 +23,15 @@ export type ServerEvent =
   | 'task:blocked'
   | 'task:completed'
   | 'task:deleted'
+  | 'tasks:imported'
+  | 'comment:created'
+  | 'comment:updated'
+  | 'comment:deleted'
+  | 'file:uploaded'
+  | 'file:deleted'
+  | 'notification:created'
+  | 'branding:updated'
+  | 'excel:processing_complete'
   | 'permissions:updated';
 
 let io: Server | null = null;

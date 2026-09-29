@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import { Calendar, Target, Trash2 } from 'lucide-react';
+import { Calendar, MessageSquare, Paperclip, Target, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { formatDate, isOverdue } from '../../lib/format';
 import { canDeleteTask, canEditTask } from '../../lib/permissions';
@@ -119,11 +119,20 @@ function DeleteButton({ task }: { task: Task }) {
   );
 }
 
-function TitleCell({ task, user, showAssignee }: { task: Task; user: User; showAssignee?: boolean }) {
+function TitleCell({ task, user, showAssignee, onOpen }: { task: Task; user: User; showAssignee?: boolean; onOpen: (id: string) => void }) {
   const overdue = task.status !== 'DONE' && isOverdue(task.dueDate, user.timezone);
   return (
     <div className="min-w-0">
-      <p className={clsx('font-semibold leading-snug', task.status === 'DONE' && 'text-ink-soft line-through decoration-line-strong')}>{task.title}</p>
+      <button
+        type="button"
+        onClick={() => onOpen(task.id)}
+        className={clsx(
+          'text-left font-semibold leading-snug hover:text-brand hover:underline',
+          task.status === 'DONE' && 'text-ink-soft line-through decoration-line-strong',
+        )}
+      >
+        {task.title}
+      </button>
       {task.status === 'BLOCKED' && task.blockReason && (
         <p className="mt-0.5 text-xs font-medium text-blocked">Bloqueada: {task.blockReason}</p>
       )}
@@ -139,12 +148,24 @@ function TitleCell({ task, user, showAssignee }: { task: Task; user: User; showA
           </span>
         )}
         {task.sourceType === 'EXCEL_IMPORT' && <span className="rounded bg-sunken px-1.5 font-semibold">Importada</span>}
+        {task.counts.comments > 0 && (
+          <span className="inline-flex items-center gap-1" title={`${task.counts.comments} comentarios`}>
+            <MessageSquare className="size-3" aria-hidden />
+            {task.counts.comments}
+          </span>
+        )}
+        {task.counts.files > 0 && (
+          <span className="inline-flex items-center gap-1" title={`${task.counts.files} archivos`}>
+            <Paperclip className="size-3" aria-hidden />
+            {task.counts.files}
+          </span>
+        )}
       </p>
     </div>
   );
 }
 
-export function TaskList({ tasks }: { tasks: Task[] }) {
+export function TaskList({ tasks, onOpen, openId }: { tasks: Task[]; onOpen: (id: string) => void; openId?: string | null }) {
   const user = useAuth((s) => s.user)!;
   const act = useTaskActions();
 
@@ -172,12 +193,16 @@ export function TaskList({ tasks }: { tasks: Task[] }) {
             {tasks.map((task) => {
               const editable = canEditTask(user, task);
               return (
-                <tr key={task.id} className={clsx('align-top transition-colors hover:bg-paper/60', task.status === 'BLOCKED' && 'bg-blocked-soft/40')}>
+                <tr
+                  key={task.id}
+                  aria-current={openId === task.id || undefined}
+                  className={clsx('align-top transition-colors hover:bg-paper/60', task.status === 'BLOCKED' && 'bg-blocked-soft/40', openId === task.id && 'bg-brand/5')}
+                >
                   <td className="py-3.5 pl-4 pt-4">
                     <SemaphoreDot value={task.semaphore} blocked={task.status === 'BLOCKED'} />
                   </td>
                   <td className="w-full min-w-56 py-3 pr-3">
-                    <TitleCell task={task} user={user} showAssignee />
+                    <TitleCell task={task} user={user} showAssignee onOpen={onOpen} />
                   </td>
                   <td className="hidden py-3 pr-3 whitespace-nowrap text-ink-soft xl:table-cell">
                     {task.assignedTo?.displayName ?? <span className="text-muted">Sin asignar</span>}
@@ -214,7 +239,7 @@ export function TaskList({ tasks }: { tasks: Task[] }) {
                   <SemaphoreDot value={task.semaphore} blocked={task.status === 'BLOCKED'} />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <TitleCell task={task} user={user} />
+                  <TitleCell task={task} user={user} onOpen={onOpen} />
                   <p className="mt-1.5 text-xs text-ink-soft">{task.assignedTo?.displayName ?? 'Sin asignar'}</p>
                 </div>
                 {canDeleteTask(user, task) && <DeleteButton task={task} />}

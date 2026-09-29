@@ -3,12 +3,16 @@ import { io, type Socket } from 'socket.io-client';
 import { useEffect, useState } from 'react';
 import { refreshAccessToken } from './api';
 import { useAuth } from '../stores/auth';
+import { toast } from '../stores/toast';
+import type { Branding } from './types';
 
 export type ConnectionState = 'connecting' | 'live' | 'offline';
 
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || undefined; // same origin in dev
 
-const TASK_EVENTS = ['task:created', 'task:updated', 'task:progress', 'task:blocked', 'task:completed', 'task:deleted'];
+const TASK_EVENTS = ['task:created', 'task:updated', 'task:progress', 'task:blocked', 'task:completed', 'task:deleted', 'tasks:imported'];
+// Detail-panel events: refresh that task's panel (and the list's comment/file counts).
+const DETAIL_EVENTS = ['comment:created', 'comment:updated', 'comment:deleted', 'file:uploaded', 'file:deleted'];
 
 // One socket per signed-in session. Server events never carry instructions for
 // the cache — they just mark the affected queries stale, and TanStack Query
@@ -49,9 +53,28 @@ export function useRealtime(): ConnectionState {
       }
     });
     // Missed events while disconnected are unknowable: refetch everything on screen.
-    socket.io.on('reconnect', () => invalidate('tasks', 'dashboard'));
+    socket.io.on('reconnect', () => invalidate('tasks', 'dashboard', 'task', 'branding'));
 
-    for (const event of TASK_EVENTS) socket.on(event, () => invalidate('tasks', 'dashboard'));
+    for (const event of TASK_EVENTS) {
+      socket.on(event, (payload?: { taskId?: string }) => {
+        invalidate('tasks', 'dashboard');
+        if (payload?.taskId) void qc.invalidateQueries({ queryKey: ['task', payload.taskId], exact: true });
+      });
+    }
+    for (const event of DETAIL_EVENTS) {
+      socket.on(event, (payload: { taskId: string }) => {
+        void qc.invalidateQueries({ queryKey: ['task', payload.taskId], exact: true });
+        invalidate('tasks');
+      });
+    }
+    // Branding changes apply everywhere at once (colors, name, logo).
+    socket.on('branding:updated', ({ branding }: { branding: Branding }) => {
+      qc.setQueryData(['branding', branding.workspaceId], branding);
+    });
+    socket.on('notification:created', ({ notification }: { notification: { title: string } }) => {
+      toast.info(notification.title);
+      invalidate('notifications');
+    });
     socket.on('permissions:updated', () => {
       void useAuth.getState().refreshMe();
       invalidate('tasks', 'dashboard', 'departments', 'users');

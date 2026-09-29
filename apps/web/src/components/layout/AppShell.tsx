@@ -1,27 +1,14 @@
 import clsx from 'clsx';
-import { LayoutDashboard, ListChecks, LogOut, Menu, X } from 'lucide-react';
+import { FileSpreadsheet, LayoutDashboard, ListChecks, LogOut, Menu, Palette, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router';
+import { useWorkspaceBranding } from '../../lib/branding';
 import { initials } from '../../lib/format';
 import { ROLE_LABEL } from '../../lib/labels';
 import { useDepartments } from '../../lib/queries';
 import { useRealtime, type ConnectionState } from '../../lib/realtime';
 import { useAuth } from '../../stores/auth';
-
-function Logo({ name }: { name: string }) {
-  return (
-    <div className="flex items-center gap-2.5">
-      <span aria-hidden className="grid size-9 place-items-center rounded-xl bg-white/10">
-        <span className="flex gap-[3px]">
-          <span className="size-1.5 rounded-full bg-sem-green" />
-          <span className="size-1.5 rounded-full bg-sem-yellow" />
-          <span className="size-1.5 rounded-full bg-sem-red" />
-        </span>
-      </span>
-      <span className="truncate text-[15px] font-extrabold tracking-tight text-white">{name}</span>
-    </div>
-  );
-}
+import { BrandMark } from './BrandMark';
 
 function LiveIndicator({ state }: { state: ConnectionState }) {
   const label = state === 'live' ? 'En vivo' : state === 'connecting' ? 'Conectando…' : 'Sin conexión';
@@ -41,11 +28,13 @@ const navItem = ({ isActive }: { isActive: boolean }) =>
 
 function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const workspace = useAuth((s) => s.workspace);
+  const role = useAuth((s) => s.user?.role);
+  const branding = useWorkspaceBranding();
   const departments = useDepartments();
   return (
-    <div className="flex h-full flex-col bg-navy px-3 py-4">
+    <div className="flex h-full flex-col overflow-y-auto bg-navy px-3 py-4">
       <div className="px-2 pb-6">
-        <Logo name={workspace?.name ?? 'Central Partner'} />
+        <BrandMark name={branding?.workspaceName ?? workspace?.name ?? 'Central Partner'} logoUrl={branding?.logoUrl} tagline={branding?.tagline} />
       </div>
       <nav aria-label="Principal" className="space-y-1">
         <NavLink to="/" end className={navItem} onClick={onNavigate}>
@@ -55,6 +44,20 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           <ListChecks className="size-4" aria-hidden /> Tareas
         </NavLink>
       </nav>
+
+      {role === 'ADMIN' && (
+        <div className="mt-8">
+          <p className="px-3 pb-2 text-[11px] font-bold uppercase tracking-widest text-white/40">Administración</p>
+          <nav aria-label="Administración" className="space-y-1">
+            <NavLink to="/admin/import" className={navItem} onClick={onNavigate}>
+              <FileSpreadsheet className="size-4" aria-hidden /> Importar Excel
+            </NavLink>
+            <NavLink to="/admin/branding" className={navItem} onClick={onNavigate}>
+              <Palette className="size-4" aria-hidden /> Marca
+            </NavLink>
+          </nav>
+        </div>
+      )}
 
       {!!departments.data?.length && (
         <div className="mt-8">

@@ -111,16 +111,18 @@ function buildUrl(path: string, query?: RequestOptions['query']) {
 }
 
 export async function api<T>(path: string, opts: RequestOptions = {}): Promise<T> {
+  // FormData goes as-is: the browser sets the multipart boundary itself.
+  const isForm = opts.body instanceof FormData;
   const send = (token: string | null) =>
     fetch(buildUrl(path, opts.query), {
       method: opts.method ?? 'GET',
       credentials: 'include',
       signal: opts.signal,
       headers: {
-        ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+        ...(opts.body !== undefined && !isForm ? { 'Content-Type': 'application/json' } : {}),
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+      body: opts.body === undefined ? undefined : isForm ? (opts.body as FormData) : JSON.stringify(opts.body),
     });
 
   let res = await send(handlers.getToken());
@@ -135,4 +137,11 @@ export async function api<T>(path: string, opts: RequestOptions = {}): Promise<T
   if (!res.ok) throw await parseError(res);
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+// Multipart upload of a single file in the field the API expects ("file").
+export function uploadFile<T>(path: string, file: File): Promise<T> {
+  const form = new FormData();
+  form.append('file', file);
+  return api<T>(path, { method: 'POST', body: form });
 }

@@ -49,6 +49,24 @@ const schema = z.object({
   SMTP_USER: z.string().default(''),
   SMTP_PASS: z.string().default(''),
   SMTP_FROM: z.string().default('Central Partner <noreply@centralpartner.local>'),
+
+  // File storage. Without AWS_S3_BUCKET files go to LOCAL_STORAGE_DIR and are
+  // served through short-lived signed API URLs (dev fallback).
+  AWS_S3_BUCKET: z.string().default(''),
+  AWS_S3_REGION: z.string().default('us-east-1'),
+  AWS_ACCESS_KEY_ID: z.string().default(''),
+  AWS_SECRET_ACCESS_KEY: z.string().default(''),
+  // Optional, for S3-compatible stores (MinIO, R2).
+  AWS_S3_ENDPOINT: z.string().default(''),
+  LOCAL_STORAGE_DIR: z.string().default('uploads'),
+  // Public base URL of this API, used to build local-storage download links.
+  API_PUBLIC_URL: z.string().default(''),
+  FILE_URL_TTL_SECONDS: z.coerce.number().int().positive().max(7 * 24 * 60 * 60).default(24 * 60 * 60),
+
+  // WhatsApp through Twilio. Without TWILIO_ACCOUNT_SID messages are only logged (dev).
+  TWILIO_ACCOUNT_SID: z.string().default(''),
+  TWILIO_AUTH_TOKEN: z.string().default(''),
+  TWILIO_WHATSAPP_NUMBER: z.string().default(''),
 });
 
 export type Env = z.infer<typeof schema>;

@@ -136,3 +136,29 @@ describe('task events reach exactly the people who can see the task', () => {
     expect(adminUpdates[0].changes.departmentId).toEqual({ old: s.marketing, new: s.finanzas });
   });
 });
+
+describe('collaboration events', () => {
+  it('comment events reach the task audience and mentions reach the person', async () => {
+    const task = await createTask(s.mkt.jefe.token, { assignedTo: s.mkt.user.id, title: 'Brief' });
+    const [luis, fin, admin] = await Promise.all([open(s.mkt.user2.token), open(s.fin.user.token), open(s.admin.token)]);
+    const comments = { luis: record(luis, 'comment:created'), fin: record(fin, 'comment:created'), admin: record(admin, 'comment:created') };
+    const notes = { luis: record(luis, 'notification:created'), admin: record(admin, 'notification:created') };
+
+    await call('POST', `/api/v1/tasks/${task.id}/comments`, { token: s.mkt.user.token, body: { content: 'Listo @luis.mkt' } });
+    await settle();
+
+    expect(comments.luis[0]).toMatchObject({ taskId: task.id, comment: { content: 'Listo @luis.mkt', mentions: [s.mkt.user2.id] } });
+    expect(comments.admin).toHaveLength(1);
+    expect(comments.fin).toHaveLength(0);
+    expect(notes.luis[0].notification).toMatchObject({ type: 'MENTIONED', taskId: task.id, fromUser: { id: s.mkt.user.id } });
+    expect(notes.admin).toHaveLength(0);
+  });
+
+  it('branding updates reach the whole workspace', async () => {
+    const [user, fin] = await Promise.all([open(s.mkt.user.token), open(s.fin.user.token)]);
+    const got = [record(user, 'branding:updated'), record(fin, 'branding:updated')];
+    await call('PATCH', `/api/v1/workspaces/${s.workspaceId}/branding`, { token: s.admin.token, body: { colors: { primary: '#123456' } } });
+    await settle();
+    for (const events of got) expect(events[0].branding.colors.primary).toBe('#123456');
+  });
+});

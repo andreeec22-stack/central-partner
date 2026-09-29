@@ -1,10 +1,12 @@
 import { ArrowRight, CircleCheck } from 'lucide-react';
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router';
+import { BrandMark } from '../components/layout/BrandMark';
 import { Button } from '../components/ui/Button';
 import { ErrorNotice, Spinner } from '../components/ui/Feedback';
 import { Field, Input } from '../components/ui/Field';
 import { api, ApiError } from '../lib/api';
+import { readLastBranding } from '../lib/branding';
 import { ROLE_LABEL } from '../lib/labels';
 import type { AuthPayload, Role, Workspace } from '../lib/types';
 import { useAuth } from '../stores/auth';
@@ -12,17 +14,12 @@ import { useAuth } from '../stores/auth';
 // ─── Layout ─────────────────────────────────────────────────────────────────
 
 function AuthLayout({ title, subtitle, children, footer }: { title: string; subtitle?: ReactNode; children: ReactNode; footer?: ReactNode }) {
+  // The workspace this browser last signed in to, if any.
+  const [last] = useState(readLastBranding);
   return (
     <div className="grid min-h-dvh lg:grid-cols-[1.05fr_1fr]">
       <aside className="relative hidden overflow-hidden bg-navy p-12 text-white lg:flex lg:flex-col lg:justify-between">
-        <div className="flex items-center gap-2.5 text-lg font-extrabold tracking-tight">
-          <span className="flex gap-1">
-            <span className="size-2.5 rounded-full bg-sem-green" />
-            <span className="size-2.5 rounded-full bg-sem-yellow" />
-            <span className="size-2.5 rounded-full bg-sem-red" />
-          </span>
-          Central Partner
-        </div>
+        <BrandMark name={last?.workspaceName ?? 'Central Partner'} logoUrl={last?.logoUrl} tagline={last?.tagline} />
         <div className="max-w-md">
           <p className="text-4xl font-extrabold leading-[1.1] tracking-tight">Tres cosas al día. Todo el equipo, en un solo lugar.</p>
           <ol className="mt-8 space-y-3 text-white/80">

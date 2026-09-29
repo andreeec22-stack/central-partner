@@ -1,6 +1,7 @@
 import type { Prisma, Task } from '@prisma/client';
 import { AppError, forbidden, notFound, validationError } from '../../lib/errors';
 import {
+  canContribute,
   canCreateTaskIn,
   canCreateTasks,
   canDeleteTask,
@@ -14,6 +15,11 @@ import { prisma, type Tx } from '../../lib/prisma';
 import { emitTo, emitToExcept, taskRooms } from '../../lib/realtime';
 import { semaphoreFor } from '../../lib/semaphore';
 import { weekRange } from '../../lib/time';
+import { notifySafely } from '../notifications/notify.service';
+import { commentInclude, presentComment } from './comments.service';
+import { fileInclude, presentFile } from './files.service';
+import { mentionableUsers } from './mentions';
+import { findVisibleTask } from './task-access';
 import type { AuthUser } from '../../types';
 import { ActivityAction, diffFields, logActivity, type FieldChanges } from '../audit/activity-log';
 import type { ClientContext } from '../auth/auth.service';
@@ -52,15 +58,6 @@ interface OpContext {
   now: Date;
   // Per-request memo so bulk updates don't re-validate the same assignee 100 times.
   memo: Map<string, Promise<void>>;
-}
-
-async function findVisibleTask(db: Tx, user: AuthUser, scope: DepartmentScope, id: string): Promise<Task> {
-  const task = await db.task.findFirst({
-    where: { id, workspaceId: user.workspaceId, deletedAt: null, departmentId: departmentFilter(scope) },
-  });
-  // 404 rather than 403: tasks outside your scope don't exist for you.
-  if (!task) throw notFound('Task');
-  return task;
 }
 
 function memoized(ctx: OpContext, key: string, check: () => Promise<void>) {
@@ -200,6 +197,19 @@ function emitTaskUpdate(task: TaskRow, previous: Task, changes: FieldChanges, ev
   }
 }
 
+// In-app + WhatsApp heads-up for whoever just received the task.
+function notifyAssignee(user: AuthUser, task: Pick<Task, 'id' | 'title' | 'workspaceId' | 'assignedToId'>, previousAssigneeId: string | null) {
+  if (!task.assignedToId || task.assignedToId === previousAssigneeId) return Promise.resolve();
+  return notifySafely({
+    workspaceId: task.workspaceId,
+    recipientIds: [task.assignedToId],
+    type: 'TASK_ASSIGNED',
+    actor: { id: user.id, displayName: user.displayName },
+    task,
+    title: `${user.displayName} te asignó "${task.title}"`,
+  });
+}
+
 // ─── Queries ────────────────────────────────────────────────────────────────
 
 export async function listTasks(user: AuthUser, q: ListTasksQuery) {
@@ -259,22 +269,22 @@ export async function listTasks(user: AuthUser, q: ListTasksQuery) {
   return { data: rows.map(presentTask), total, page, limit, filters };
 }
 
+const DETAIL_ACTIVITY_LIMIT = 100;
+
+// Everything the detail panel shows, in one round trip: the task, its comments
+// and files (newest first), the last 100 audit entries and what the caller may do.
 export async function getTaskDetail(user: AuthUser, id: string) {
   const scope = await departmentScope(user);
-  await findVisibleTask(prisma, user, scope, id);
+  const visible = await findVisibleTask(prisma, user, scope, id);
 
-  const [task, comments, files, subTasks, dependencies, dependents, activity] = await Promise.all([
+  const [task, comments, files, subTasks, dependencies, dependents, activity, people] = await Promise.all([
     prisma.task.findUniqueOrThrow({ where: { id }, include: taskInclude }),
     prisma.comment.findMany({
       where: { taskId: id, deletedAt: null },
-      include: { author: { select: { id: true, displayName: true } } },
-      orderBy: { createdAt: 'asc' },
+      include: commentInclude,
+      orderBy: { createdAt: 'desc' },
     }),
-    prisma.taskFile.findMany({
-      where: { taskId: id, deletedAt: null },
-      select: { id: true, filename: true, mimeType: true, sizeBytes: true, createdAt: true, uploadedById: true },
-      orderBy: { createdAt: 'asc' },
-    }),
+    prisma.taskFile.findMany({ where: { taskId: id, deletedAt: null }, include: fileInclude, orderBy: { createdAt: 'desc' } }),
     prisma.task.findMany({
       where: { parentTaskId: id, deletedAt: null },
       select: { id: true, title: true, status: true, progress: true, semaphore: true, assignedToId: true },
@@ -292,20 +302,38 @@ export async function getTaskDetail(user: AuthUser, id: string) {
       where: { workspaceId: user.workspaceId, entityType: 'Task', entityId: id },
       include: { user: { select: { id: true, displayName: true } } },
       orderBy: { createdAt: 'desc' },
-      take: 50,
+      take: DETAIL_ACTIVITY_LIMIT,
     }),
+    mentionableUsers(prisma, visible.workspaceId, visible.departmentId),
   ]);
+  const index = new Map(people.map((p) => [p.id, { id: p.id, displayName: p.displayName, handle: p.handle }]));
 
   return {
     task: presentTask(task),
     blockReason: task.blockReason,
     blockedSince: task.blockedSince,
-    comments,
-    files,
+    comments: comments.map((c) => presentComment(c, index)),
+    files: await Promise.all(files.map(presentFile)),
     subTasks,
     dependencies: dependencies.map((d) => d.dependsOn),
     dependents: dependents.map((d) => d.task),
-    activity,
+    activity: activity.map((a) => ({
+      id: a.id,
+      taskId: id,
+      action: a.action,
+      entityType: a.entityType,
+      userId: a.userId,
+      changes: a.changes,
+      metadata: a.metadata,
+      timestamp: a.createdAt,
+      user: a.user ? { id: a.user.id, name: a.user.displayName } : null,
+    })),
+    permissions: {
+      canEdit: canEditTask(user, task),
+      canComment: canContribute(user, task),
+      canAddFiles: canContribute(user, task),
+      canDelete: canDeleteTask(user, task),
+    },
   };
 }
 
@@ -378,6 +406,7 @@ export async function createTask(user: AuthUser, input: CreateTaskInput, ctx: Cl
     sourceType: task.sourceType,
     task: payload,
   });
+  await notifyAssignee(user, task, null);
   return { task: payload };
 }
 
@@ -410,6 +439,7 @@ export async function updateTask(user: AuthUser, id: string, patch: UpdateTaskIn
 
   if (Object.keys(result.plan.changes).length) {
     emitTaskUpdate(result.task, result.previous, result.plan.changes, result.plan.events);
+    await notifyAssignee(user, result.task, result.previous.assignedToId);
   }
   return { task: presentTask(result.task) };
 }
@@ -477,6 +507,7 @@ export async function bulkUpdateTasks(user: AuthUser, input: BulkUpdateInput, ct
   );
 
   for (const r of results) emitTaskUpdate(r.task, r.previous, r.plan.changes, r.plan.events);
+  await Promise.all(results.map((r) => notifyAssignee(user, r.task, r.previous.assignedToId)));
   return { successful: input.taskIds, failed: [] as never[], updatedCount: results.length };
 }
 

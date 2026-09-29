@@ -8,8 +8,11 @@ import { errorHandler, notFoundHandler } from './middleware/error-handler';
 import { rateLimit } from './middleware/rate-limit';
 import { requestContext } from './middleware/request-context';
 import { authRoutes } from './modules/auth/auth.routes';
+import { brandingRoutes, publicBrandingRoutes } from './modules/branding/branding.routes';
 import { dashboardRoutes } from './modules/dashboard/dashboard.routes';
 import { departmentRoutes } from './modules/departments/departments.routes';
+import { excelImportRoutes } from './modules/excel-imports/excel-imports.routes';
+import { storageRoutes } from './modules/storage/storage.routes';
 import { taskRoutes } from './modules/tasks/tasks.routes';
 import { publicUserRoutes, userRoutes } from './modules/users/users.routes';
 import type { AppEnv } from './types';
@@ -18,7 +21,12 @@ export function createApp() {
   const app = new Hono<AppEnv>();
 
   app.use('*', requestContext);
-  app.use('*', secureHeaders());
+  // Logos and signed file links are loaded cross-origin (<img>, downloads from
+  // the SPA's domain); everything else keeps the strict same-origin policy.
+  const strictHeaders = secureHeaders();
+  const assetHeaders = secureHeaders({ crossOriginResourcePolicy: 'cross-origin' });
+  const isAsset = (path: string) => path.startsWith('/api/v1/public/') || path.startsWith('/api/v1/storage/');
+  app.use('*', (c, next) => (isAsset(c.req.path) ? assetHeaders : strictHeaders)(c, next));
   app.use(
     '*',
     cors({
@@ -48,6 +56,10 @@ export function createApp() {
   api.route('/departments', departmentRoutes);
   api.route('/tasks', taskRoutes);
   api.route('/dashboard', dashboardRoutes);
+  api.route('/excel-imports', excelImportRoutes);
+  api.route('/workspaces', brandingRoutes);
+  api.route('/public', publicBrandingRoutes);
+  api.route('/storage', storageRoutes);
 
   app.route('/api/v1', api);
 

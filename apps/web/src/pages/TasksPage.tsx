@@ -3,6 +3,7 @@ import { Inbox, Plus, Search } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { TaskCreateDialog } from '../components/task/TaskCreateDialog';
+import { TaskDetailPanel } from '../components/task/detail/TaskDetailPanel';
 import { TaskList } from '../components/task/TaskList';
 import { Button } from '../components/ui/Button';
 import { EmptyState, ErrorNotice, Skeleton } from '../components/ui/Feedback';
@@ -43,7 +44,7 @@ function useFilters() {
       (prev) => {
         const next = new URLSearchParams(prev);
         for (const [k, v] of Object.entries(patch)) (v ? next.set(k, v) : next.delete(k));
-        if (!('page' in patch)) next.delete('page');
+        if (!('page' in patch) && !('task' in patch)) next.delete('page');
         return next;
       },
       { replace: true },
@@ -58,6 +59,10 @@ export default function TasksPage() {
   const tasks = useTasks(filters);
   const [creating, setCreating] = useState(false);
   const [search, setSearch] = useState(raw.get('q') ?? '');
+  // The open task lives in the URL too, so a notification or WhatsApp link opens it.
+  const openTaskId = raw.get('task');
+  const openTask = (id: string) => update({ task: id });
+  const closeTask = () => update({ task: null });
 
   // Debounce typing into the URL (and so into the query).
   useEffect(() => {
@@ -193,7 +198,7 @@ export default function TasksPage() {
         </EmptyState>
       ) : (
         <div className={clsx('transition-opacity', tasks.isPlaceholderData && 'opacity-60')}>
-          <TaskList tasks={tasks.data!.data} />
+          <TaskList tasks={tasks.data!.data} onOpen={openTask} openId={openTaskId} />
           {pages > 1 && (
             <nav aria-label="Paginación" className="mt-4 flex items-center justify-center gap-3 text-sm">
               <Button variant="secondary" size="sm" disabled={(filters.page ?? 1) <= 1} onClick={() => update({ page: String((filters.page ?? 1) - 1) })}>
@@ -209,6 +214,8 @@ export default function TasksPage() {
           )}
         </div>
       )}
+
+      {openTaskId && <TaskDetailPanel key={openTaskId} taskId={openTaskId} onClose={closeTask} />}
 
       <TaskCreateDialog open={creating} onClose={() => setCreating(false)} defaultDepartmentId={filters.departmentId} />
     </div>

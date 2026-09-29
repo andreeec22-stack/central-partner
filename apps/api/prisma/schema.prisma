@@ -107,6 +107,7 @@ model Workspace {
   comments             Comment[]
   files                TaskFile[]
   notifications        Notification[]
+  whatsAppLogs         WhatsAppNotificationLog[]
   activityLogs         ActivityLog[]
   weeklyArchives       WeeklyArchive[]
   excelImports         ExcelImport[]
@@ -121,6 +122,8 @@ model WorkspaceBranding {
   id            String   @id @default(uuid()) @db.Uuid
   workspaceId   String   @unique @db.Uuid
   logoUrl       String?
+  // Storage key of the current logo; logoUrl is the public, cache-busted API path to it.
+  logoKey       String?  @db.VarChar(512)
   colorPrimary  String   @default("#2563EB") @db.VarChar(7)
   colorSuccess  String   @default("#10B981") @db.VarChar(7)
   colorWarning  String   @default("#F59E0B") @db.VarChar(7)
@@ -197,6 +200,7 @@ model User {
   comments             Comment[]
   uploadedFiles        TaskFile[]
   notifications        Notification[]
+  whatsAppLogs         WhatsAppNotificationLog[]
   activityLogs         ActivityLog[]
   excelImports         ExcelImport[]
   performanceSnapshots UserPerformanceSnapshot[]
@@ -473,6 +477,33 @@ model Notification {
   @@map("notifications")
 }
 
+enum WhatsAppDeliveryStatus {
+  SENT
+  FAILED
+  SKIPPED
+}
+
+// One row per WhatsApp attempt. Also the source for the 5-minute per-task rate limit.
+model WhatsAppNotificationLog {
+  id          String                 @id @default(uuid()) @db.Uuid
+  workspaceId String                 @db.Uuid
+  userId      String                 @db.Uuid
+  taskId      String?                @db.Uuid
+  phoneNumber String                 @db.VarChar(20)
+  type        NotificationType
+  status      WhatsAppDeliveryStatus
+  // Why it was skipped (RATE_LIMITED, QUIET_HOURS, …) or the provider error.
+  reason      String?                @db.VarChar(500)
+  providerId  String?                @db.VarChar(64)
+  createdAt   DateTime               @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, taskId, createdAt])
+  @@map("whatsapp_notification_logs")
+}
+
 // ─── Audit & history ────────────────────────────────────────────────────────
 
 // who / what / when / old / new. Append-only.
@@ -525,8 +556,14 @@ model ExcelImport {
   mappedTasksCount  Int               @default(0)
   unmappedRowsCount Int               @default(0)
   mappingLog        Json?
-  status            ExcelImportStatus @default(PENDING)
+  // PROCESSING while parsing → PENDING (awaiting review) → COMPLETED once confirmed; FAILED if unreadable.
+  status            ExcelImportStatus @default(PROCESSING)
   errorMessage      String?
+  totalRows         Int               @default(0)
+  createdCount      Int               @default(0)
+  skippedCount      Int               @default(0)
+  confirmedAt       DateTime?
+  confirmedById     String?           @db.Uuid
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt
 

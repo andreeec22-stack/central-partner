@@ -14,6 +14,11 @@ export function canEditTask(user: User, task: Pick<Task, 'departmentId' | 'assig
   return task.assignedToId === user.id || task.createdById === user.id;
 }
 
+// Reassigning, rescheduling and setting the KPI target are the area head's call.
+export function isManagerOf(user: User, task: Pick<Task, 'departmentId'>): boolean {
+  return user.role === 'ADMIN' || (user.role === 'JEFE_AREA' && user.departmentId === task.departmentId);
+}
+
 export function canDeleteTask(user: User, task: Pick<Task, 'departmentId' | 'createdById'>): boolean {
   if (user.role === 'ADMIN') return true;
   if (user.role === 'JEFE_AREA' && user.departmentId === task.departmentId) return true;

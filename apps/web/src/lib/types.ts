@@ -105,3 +105,135 @@ export interface AuthPayload {
   accessToken: string;
   expiresIn: number;
 }
+
+// ─── Task detail (GET /tasks/:id) ───────────────────────────────────────────
+
+export interface MentionRef {
+  id: string;
+  displayName: string;
+  handle: string;
+}
+
+export interface Comment {
+  id: string;
+  taskId: string;
+  userId: string;
+  content: string;
+  mentions: string[];
+  mentionedUsers: MentionRef[];
+  editedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  user: { id: string; name: string; email: string };
+}
+
+export interface TaskFile {
+  id: string;
+  taskId: string;
+  uploadedBy: string;
+  filename: string;
+  originalFilename: string;
+  fileUrl: string;
+  urlExpiresAt: string;
+  fileSize: number;
+  mimeType: string;
+  uploadedAt: string;
+  user: { id: string; name: string };
+}
+
+export interface ActivityEntry {
+  id: string;
+  taskId: string;
+  action: string;
+  entityType: string;
+  userId: string | null;
+  changes: Record<string, { old: unknown; new: unknown }> | null;
+  metadata: Record<string, unknown> | null;
+  timestamp: string;
+  user: { id: string; name: string } | null;
+}
+
+export interface TaskPermissions {
+  canEdit: boolean;
+  canComment: boolean;
+  canAddFiles: boolean;
+  canDelete: boolean;
+}
+
+export interface TaskDetail {
+  task: Task;
+  comments: Comment[];
+  files: TaskFile[];
+  activity: ActivityEntry[];
+  permissions: TaskPermissions;
+  subTasks: { id: string; title: string; status: TaskStatus; progress: number; semaphore: Semaphore }[];
+  dependencies: { id: string; title: string; status: TaskStatus; semaphore: Semaphore }[];
+}
+
+export interface Mentionable extends MentionRef {
+  role: Role;
+}
+
+// ─── Branding ───────────────────────────────────────────────────────────────
+
+export interface BrandColors {
+  primary: string;
+  success: string;
+  warning: string;
+  danger: string;
+}
+
+export interface Branding {
+  workspaceId: string;
+  workspaceName: string;
+  tagline: string | null;
+  logoUrl: string | null;
+  colors: BrandColors;
+  updatedAt: string;
+}
+
+// ─── Excel import ───────────────────────────────────────────────────────────
+
+export type ImportTaskStatus = 'TODO' | 'IN_PROGRESS' | 'DONE';
+
+export interface DetectedTask {
+  rowIndex: number;
+  title: string;
+  description?: string;
+  departmentId?: string;
+  departmentName?: string;
+  assigneeId?: string;
+  assigneeName?: string;
+  priority: Priority;
+  status: ImportTaskStatus;
+  kpiTarget?: string;
+  dueDate?: string;
+  confidence: number;
+}
+
+export interface ImportUploadResult {
+  importId: string;
+  status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+  detectedTasks: DetectedTask[];
+  unmappedRowsCount: number;
+  unmappedRows: { rowIndex: number; reason: string }[];
+  totalRowsCount: number;
+}
+
+export interface ImportSummary {
+  id: string;
+  filename: string;
+  uploadedAt: string;
+  status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+  errorMessage: string | null;
+  totalRows: number;
+  detectedCount: number;
+  createdCount: number;
+  skippedCount: number;
+}
+
+export interface ImportConfirmResult {
+  createdCount: number;
+  skippedCount: number;
+  skippedDetails: { rowIndex: number; reason: string }[];
+}
