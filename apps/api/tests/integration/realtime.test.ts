@@ -1,0 +1,138 @@
+import type { AddressInfo } from 'node:net';
+import type { Server as HttpServer } from 'node:http';
+import { serve } from '@hono/node-server';
+import { io as connect, type Socket } from 'socket.io-client';
+import { prisma } from '../../src/lib/prisma';
+import { setRealtimeServer } from '../../src/lib/realtime';
+import { attachSocketServer } from '../../src/realtime/socket-server';
+import { createTask, seedWorkspace, type Seed } from './fixtures';
+import { app, call, resetDatabase } from './helpers';
+
+let server: HttpServer;
+let url: string;
+let s: Seed;
+const sockets: Socket[] = [];
+
+beforeAll(async () => {
+  server = serve({ fetch: app.fetch, port: 0 }) as HttpServer;
+  await new Promise<void>((resolve) => server.once('listening', () => resolve()));
+  attachSocketServer(server);
+  url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+});
+
+afterAll(async () => {
+  setRealtimeServer(null);
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await prisma.$disconnect();
+});
+
+beforeEach(async () => {
+  await resetDatabase();
+  s = await seedWorkspace();
+});
+
+afterEach(() => {
+  while (sockets.length) sockets.pop()!.disconnect();
+});
+
+// Resolves once the server has put the socket in its rooms.
+function open(token: string): Promise<Socket> {
+  return new Promise((resolve, reject) => {
+    const socket = connect(url, { auth: { token }, transports: ['websocket'], reconnection: false });
+    sockets.push(socket);
+    socket.once('ready', () => resolve(socket));
+    socket.once('connect_error', reject);
+  });
+}
+
+function record(socket: Socket, event: string) {
+  const received: any[] = [];
+  socket.on(event, (payload) => received.push(payload));
+  return received;
+}
+
+const settle = () => new Promise((r) => setTimeout(r, 150));
+
+describe('socket authentication', () => {
+  it('rejects missing or invalid tokens', async () => {
+    await expect(open('')).rejects.toThrow('UNAUTHORIZED');
+    await expect(open('not-a-jwt')).rejects.toThrow('TOKEN_INVALID');
+  });
+
+  it('disconnects the session’s sockets on logout', async () => {
+    const socket = await open(s.mkt.user.token);
+    const closed = new Promise((resolve) => socket.once('disconnect', resolve));
+    await call('POST', '/api/v1/auth/logout', { token: s.mkt.user.token });
+    await expect(closed).resolves.toBe('io server disconnect');
+  });
+});
+
+describe('task events reach exactly the people who can see the task', () => {
+  it('task:created goes to the department and ADMINs only', async () => {
+    const [mkt, fin, admin] = await Promise.all([open(s.mkt.user2.token), open(s.fin.user.token), open(s.admin.token)]);
+    const got = { mkt: record(mkt, 'task:created'), fin: record(fin, 'task:created'), admin: record(admin, 'task:created') };
+
+    const task = await createTask(s.mkt.user.token, { title: 'Campaña' });
+    await settle();
+
+    expect(got.mkt).toHaveLength(1);
+    expect(got.mkt[0]).toMatchObject({ taskId: task.id, title: 'Campaña', departmentId: s.marketing, sourceType: 'MANUAL' });
+    expect(got.admin).toHaveLength(1);
+    expect(got.fin).toHaveLength(0);
+  });
+
+  it('progress, blocked and completed events carry their payloads', async () => {
+    const task = await createTask(s.mkt.user.token, { title: 'Reporte' });
+    const jefe = await open(s.mkt.jefe.token);
+    const progress = record(jefe, 'task:progress');
+    const blocked = record(jefe, 'task:blocked');
+    const completed = record(jefe, 'task:completed');
+    const updated = record(jefe, 'task:updated');
+
+    await call('PATCH', `/api/v1/tasks/${task.id}`, { token: s.mkt.user.token, body: { progress: 75 } });
+    await call('PATCH', `/api/v1/tasks/${task.id}`, { token: s.mkt.user.token, body: { status: 'BLOCKED', blockReason: 'Falta arte' } });
+    await call('PATCH', `/api/v1/tasks/${task.id}`, { token: s.mkt.user.token, body: { status: 'DONE' } });
+    await settle();
+
+    expect(progress.map((p) => [p.progress, p.semaphore])).toEqual([
+      [75, 'YELLOW'],
+      [100, 'GREEN'],
+    ]);
+    expect(blocked).toEqual([expect.objectContaining({ taskId: task.id, reason: 'Falta arte', blockedByUserId: s.mkt.user.id })]);
+    expect(completed).toEqual([expect.objectContaining({ taskId: task.id, onTime: null })]);
+    expect(updated).toHaveLength(3);
+    expect(updated[0].changes.progress).toEqual({ old: 0, new: 75 });
+  });
+
+  it('a JEFE_AREA granted visibility starts receiving after a role/visibility refresh', async () => {
+    const jefe = await open(s.mkt.jefe.token);
+    const created = record(jefe, 'task:created');
+
+    await createTask(s.fin.user.token, { title: 'Antes' });
+    await settle();
+    expect(created).toHaveLength(0);
+
+    await prisma.departmentVisibility.create({
+      data: { workspaceId: s.workspaceId, jefeAreaId: s.mkt.jefe.id, visibleDepartmentIds: [s.finanzas] },
+    });
+    // The visibility endpoint (Days 9–10) will trigger this refresh itself.
+    const { refreshUserRooms } = await import('../../src/realtime/socket-server');
+    await refreshUserRooms(s.mkt.jefe.id);
+
+    await createTask(s.fin.user.token, { title: 'Después' });
+    await settle();
+    expect(created.map((e) => e.title)).toEqual(['Después']);
+  });
+
+  it('moving a task away tells the old department it left their view — without its contents', async () => {
+    const task = await createTask(s.mkt.user.token, { title: 'Mover' });
+    const [mkt, admin] = await Promise.all([open(s.mkt.user2.token), open(s.admin.token)]);
+    const mktUpdates = record(mkt, 'task:updated');
+    const adminUpdates = record(admin, 'task:updated');
+    await call('PATCH', `/api/v1/tasks/${task.id}`, { token: s.admin.token, body: { departmentId: s.finanzas, assignedTo: null } });
+    await settle();
+    expect(mktUpdates).toEqual([{ taskId: task.id, removed: true }]);
+    expect(adminUpdates).toHaveLength(1);
+    expect(adminUpdates[0].changes.departmentId).toEqual({ old: s.marketing, new: s.finanzas });
+  });
+});

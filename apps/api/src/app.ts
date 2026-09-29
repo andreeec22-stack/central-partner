@@ -8,6 +8,9 @@ import { errorHandler, notFoundHandler } from './middleware/error-handler';
 import { rateLimit } from './middleware/rate-limit';
 import { requestContext } from './middleware/request-context';
 import { authRoutes } from './modules/auth/auth.routes';
+import { departmentRoutes } from './modules/departments/departments.routes';
+import { taskRoutes } from './modules/tasks/tasks.routes';
+import { publicUserRoutes, userRoutes } from './modules/users/users.routes';
 import type { AppEnv } from './types';
 
 export function createApp() {
@@ -39,6 +42,10 @@ export function createApp() {
   const api = new Hono<AppEnv>();
   api.use('*', rateLimit({ prefix: 'api', max: env.RATE_LIMIT_MAX, windowSeconds: env.RATE_LIMIT_WINDOW_SECONDS }));
   api.route('/auth', authRoutes);
+  api.route('/users', publicUserRoutes);
+  api.route('/users', userRoutes);
+  api.route('/departments', departmentRoutes);
+  api.route('/tasks', taskRoutes);
 
   app.route('/api/v1', api);
 

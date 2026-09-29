@@ -6,6 +6,7 @@ import { logger } from '../../lib/logger';
 import { sendMail } from '../../lib/mailer';
 import { burnPasswordCheck, hashPassword, verifyPassword } from '../../lib/password';
 import { prisma, type Tx } from '../../lib/prisma';
+import { disconnectSession, disconnectUser } from '../../lib/realtime';
 import { slugify } from '../../lib/slug';
 import { signAccessToken } from '../../lib/tokens';
 import { ActivityAction, logActivity } from '../audit/activity-log';
@@ -51,7 +52,7 @@ function accessTokenFor(user: { id: string; workspaceId: string; role: Role }, s
   return signAccessToken({ sub: user.id, wid: user.workspaceId, sid: sessionId, role: user.role });
 }
 
-async function startSession(
+export async function startSession(
   db: Tx,
   user: { id: string; workspaceId: string; role: Role },
   ctx: ClientContext,
@@ -204,6 +205,7 @@ export async function refresh(rawToken: string, ctx: ClientContext): Promise<Iss
       ipAddress: ctx.ipAddress,
     });
     logger.warn('refresh token reuse detected', { sessionId: session.id, userId: session.userId });
+    await disconnectSession(session.id);
     return unauthorized('Session has ended, please sign in again', 'SESSION_REVOKED');
   };
 
@@ -237,6 +239,7 @@ export async function logout(sessionId: string, ctx: ClientContext) {
   const session = await prisma.session.findUnique({ where: { id: sessionId } });
   if (!session || session.revokedAt) return;
   await prisma.session.update({ where: { id: sessionId }, data: { revokedAt: new Date() } });
+  await disconnectSession(sessionId);
   await logActivity({
     workspaceId: session.workspaceId,
     userId: session.userId,
@@ -339,6 +342,7 @@ export async function confirmPasswordReset(token: string, newPassword: string, c
       tx,
     );
   });
+  await disconnectUser(stored.userId);
 }
 
 export async function getCurrentUser(userId: string) {

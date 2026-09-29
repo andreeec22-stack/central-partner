@@ -3,16 +3,12 @@ import { createMiddleware } from 'hono/factory';
 import { forbidden, unauthorized } from '../lib/errors';
 import { prisma } from '../lib/prisma';
 import { verifyAccessToken } from '../lib/tokens';
-import type { AppEnv } from '../types';
+import type { AppEnv, AuthUser } from '../types';
 
-// Verifies the JWT, then re-reads user + session from the DB on every request so
-// that role changes, deactivation and logout take effect immediately rather than
-// when the token expires. Both lookups are by primary key.
-export const requireAuth = createMiddleware<AppEnv>(async (c, next) => {
-  const header = c.req.header('authorization');
-  const token = header?.startsWith('Bearer ') ? header.slice(7).trim() : undefined;
-  if (!token) throw unauthorized();
-
+// Verifies the JWT, then re-reads user + session from the DB so that role
+// changes, deactivation and logout take effect immediately rather than when the
+// token expires. Both lookups are by primary key. Shared by HTTP and Socket.IO.
+export async function authenticateAccessToken(token: string): Promise<AuthUser> {
   const claims = verifyAccessToken(token);
   if (!claims) throw unauthorized('Invalid or expired access token', 'TOKEN_INVALID');
 
@@ -44,7 +40,7 @@ export const requireAuth = createMiddleware<AppEnv>(async (c, next) => {
     throw unauthorized('Session has ended, please sign in again', 'SESSION_REVOKED');
   }
 
-  c.set('user', {
+  return {
     id: user.id,
     workspaceId: user.workspaceId,
     sessionId: claims.sid,
@@ -53,7 +49,14 @@ export const requireAuth = createMiddleware<AppEnv>(async (c, next) => {
     email: user.email,
     displayName: user.displayName,
     timezone: user.timezone,
-  });
+  };
+}
+
+export const requireAuth = createMiddleware<AppEnv>(async (c, next) => {
+  const header = c.req.header('authorization');
+  const token = header?.startsWith('Bearer ') ? header.slice(7).trim() : undefined;
+  if (!token) throw unauthorized();
+  c.set('user', await authenticateAccessToken(token));
   await next();
 });
 

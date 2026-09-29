@@ -1,8 +1,7 @@
 import type { Context } from 'hono';
 import { Hono } from 'hono';
-import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
-import { cookieSecure, env } from '../../config/env';
-import { forbidden, unauthorized } from '../../lib/errors';
+import { env } from '../../config/env';
+import { unauthorized } from '../../lib/errors';
 import { verifyAccessToken } from '../../lib/tokens';
 import { parseJson } from '../../lib/validation';
 import { requireAuth } from '../../middleware/auth';
@@ -16,44 +15,13 @@ import {
   resetRequestSchema,
 } from './auth.schemas';
 import * as auth from './auth.service';
+import { clearRefreshCookie, readRefreshToken, setRefreshCookie } from './cookies';
 
-const REFRESH_COOKIE = 'cp_refresh';
-const COOKIE_PATH = '/api/v1/auth';
-
-function clientContext(c: Context<AppEnv>): auth.ClientContext {
+export function clientContext(c: Context<AppEnv>): auth.ClientContext {
   return { ipAddress: c.get('clientIp'), userAgent: c.req.header('user-agent') };
 }
 
-function setRefreshCookie(c: Context<AppEnv>, token: string) {
-  setCookie(c, REFRESH_COOKIE, token, {
-    httpOnly: true,
-    secure: cookieSecure,
-    sameSite: env.COOKIE_SAMESITE,
-    path: COOKIE_PATH,
-    maxAge: env.REFRESH_TOKEN_TTL_SECONDS,
-  });
-}
-
-function clearRefreshCookie(c: Context<AppEnv>) {
-  deleteCookie(c, REFRESH_COOKIE, { path: COOKIE_PATH, secure: cookieSecure, sameSite: env.COOKIE_SAMESITE });
-}
-
-// A cookie is sent automatically by the browser, so a cookie-authenticated request
-// must come from one of our own origins (CSRF guard). Body tokens don't need this.
-function assertTrustedOrigin(c: Context<AppEnv>) {
-  const origin = c.req.header('origin');
-  if (!origin || env.CORS_ORIGIN.length === 0) return;
-  if (!env.CORS_ORIGIN.includes(origin)) throw forbidden('Untrusted origin');
-}
-
-function readRefreshToken(c: Context<AppEnv>, fromBody: string | undefined): string | undefined {
-  if (fromBody) return fromBody;
-  const fromCookie = getCookie(c, REFRESH_COOKIE);
-  if (fromCookie) assertTrustedOrigin(c);
-  return fromCookie;
-}
-
-const authLimiter = (prefix: string) =>
+export const authLimiter = (prefix: string) =>
   rateLimit({ prefix, max: env.AUTH_RATE_LIMIT_MAX, windowSeconds: env.RATE_LIMIT_WINDOW_SECONDS, keyBy: (c) => c.get('clientIp') });
 
 export const authRoutes = new Hono<AppEnv>()
