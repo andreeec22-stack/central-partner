@@ -34,6 +34,11 @@ const schema = z.object({
     .transform((v) => (v === undefined ? undefined : v === 'true')),
 
   CORS_ORIGIN: csv,
+  // true only when running behind a proxy that sets X-Forwarded-For (Railway).
+  TRUST_PROXY: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
 
   RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(300),
