@@ -5,7 +5,8 @@ import { requireAuth, requireRole } from '../../middleware/auth';
 import type { AppEnv } from '../../types';
 import { authLimiter, clientContext } from '../auth/auth.routes';
 import { setRefreshCookie } from '../auth/cookies';
-import { acceptInviteSchema, inviteSchema, listUsersSchema, updateUserSchema } from './users.schemas';
+import { forbidden } from '../../lib/errors';
+import { acceptInviteSchema, inviteSchema, listUsersSchema, updateProfileSchema, updateUserSchema } from './users.schemas';
 import * as users from './users.service';
 
 const tokenQuery = z.object({ token: z.string().min(1).max(200) });
@@ -37,7 +38,17 @@ export const userRoutes = new Hono<AppEnv>()
     return c.json({ success: true });
   })
 
-  .patch('/:id', async (c) => {
+  // Self-service profile: never role, department or task permissions.
+  .patch('/:id/profile', async (c) => {
+    const body = await c.req.json().catch(() => null);
+    if (body && typeof body === 'object' && ['role', 'departmentId', 'canCreateTasks'].some((k) => k in body)) {
+      throw forbidden('Only an administrator can change role, department or task permissions');
+    }
+    const input = await parseJson(c, updateProfileSchema);
+    return c.json(await users.updateProfile(c.get('user'), idParam(c, 'id', 'User'), input, clientContext(c)));
+  })
+
+  .patch('/:id', requireRole('ADMIN'), async (c) => {
     const input = await parseJson(c, updateUserSchema);
     return c.json(await users.updateUser(c.get('user'), idParam(c, 'id', 'User'), input, clientContext(c)));
   })

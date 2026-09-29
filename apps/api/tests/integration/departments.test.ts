@@ -33,7 +33,7 @@ describe('departments', () => {
       body: { headId: s.mkt.jefe.id, color: '#10B981' },
     });
     expect(res.status).toBe(200);
-    expect(res.body.department).toMatchObject({ headId: s.mkt.jefe.id, color: '#10B981', usersCount: 4 });
+    expect(res.body.department).toMatchObject({ headId: s.mkt.jefe.id, color: '#10B981', usersCount: 5 });
     const log = await prisma.activityLog.findFirst({ where: { action: 'DEPARTMENT_UPDATED', entityId: s.marketing } });
     expect(log?.changes).toMatchObject({ headId: { old: null, new: s.mkt.jefe.id } });
   });
@@ -52,7 +52,7 @@ describe('departments', () => {
   });
 
   it('refuses to delete a department with active tasks, then soft-deletes and unassigns members', async () => {
-    const task = await createTask(s.mkt.user.token, { title: 'Campaña octubre' });
+    const task = await createTask(s.mkt.jefe.token, { assignedTo: s.mkt.user.id, title: 'Campaña octubre' });
     const blocked = await call('DELETE', `/api/v1/departments/${s.marketing}`, { token: s.admin.token });
     expect(blocked.status).toBe(409);
     expect(blocked.body.error.code).toBe('DEPARTMENT_NOT_EMPTY');

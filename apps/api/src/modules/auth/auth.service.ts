@@ -23,13 +23,17 @@ export interface IssuedTokens {
   expiresIn: number;
 }
 
-export function toPublicUser(user: Pick<User, 'id' | 'workspaceId' | 'email' | 'displayName' | 'role' | 'departmentId' | 'phoneNumber' | 'timezone'>) {
+export function toPublicUser(
+  user: Pick<User, 'id' | 'workspaceId' | 'email' | 'displayName' | 'role' | 'canCreateTasks' | 'departmentId' | 'phoneNumber' | 'timezone'>,
+) {
   return {
     id: user.id,
     workspaceId: user.workspaceId,
     email: user.email,
     displayName: user.displayName,
     role: user.role,
+    // The frontend shows "New task" only when this is true.
+    canCreateTasks: user.role === 'ADMIN' || user.canCreateTasks,
     departmentId: user.departmentId,
     phoneNumber: user.phoneNumber,
     timezone: user.timezone,

@@ -72,7 +72,7 @@ describe('task events reach exactly the people who can see the task', () => {
     const [mkt, fin, admin] = await Promise.all([open(s.mkt.user2.token), open(s.fin.user.token), open(s.admin.token)]);
     const got = { mkt: record(mkt, 'task:created'), fin: record(fin, 'task:created'), admin: record(admin, 'task:created') };
 
-    const task = await createTask(s.mkt.user.token, { title: 'Campaña' });
+    const task = await createTask(s.mkt.jefe.token, { assignedTo: s.mkt.user.id, title: 'Campaña' });
     await settle();
 
     expect(got.mkt).toHaveLength(1);
@@ -82,7 +82,7 @@ describe('task events reach exactly the people who can see the task', () => {
   });
 
   it('progress, blocked and completed events carry their payloads', async () => {
-    const task = await createTask(s.mkt.user.token, { title: 'Reporte' });
+    const task = await createTask(s.mkt.jefe.token, { assignedTo: s.mkt.user.id, title: 'Reporte' });
     const jefe = await open(s.mkt.jefe.token);
     const progress = record(jefe, 'task:progress');
     const blocked = record(jefe, 'task:blocked');
@@ -108,7 +108,7 @@ describe('task events reach exactly the people who can see the task', () => {
     const jefe = await open(s.mkt.jefe.token);
     const created = record(jefe, 'task:created');
 
-    await createTask(s.fin.user.token, { title: 'Antes' });
+    await createTask(s.fin.jefe.token, { assignedTo: s.fin.user.id, title: 'Antes' });
     await settle();
     expect(created).toHaveLength(0);
 
@@ -119,13 +119,13 @@ describe('task events reach exactly the people who can see the task', () => {
     const { refreshUserRooms } = await import('../../src/realtime/socket-server');
     await refreshUserRooms(s.mkt.jefe.id);
 
-    await createTask(s.fin.user.token, { title: 'Después' });
+    await createTask(s.fin.jefe.token, { assignedTo: s.fin.user.id, title: 'Después' });
     await settle();
     expect(created.map((e) => e.title)).toEqual(['Después']);
   });
 
   it('moving a task away tells the old department it left their view — without its contents', async () => {
-    const task = await createTask(s.mkt.user.token, { title: 'Mover' });
+    const task = await createTask(s.mkt.jefe.token, { assignedTo: s.mkt.user.id, title: 'Mover' });
     const [mkt, admin] = await Promise.all([open(s.mkt.user2.token), open(s.admin.token)]);
     const mktUpdates = record(mkt, 'task:updated');
     const adminUpdates = record(admin, 'task:updated');

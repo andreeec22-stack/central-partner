@@ -21,6 +21,9 @@ export const inviteSchema = z
     role: roleSchema,
     departmentId: z.string().uuid().nullable().optional(),
     phoneNumber: phoneSchema.nullable().optional(),
+    // "Permitir que este usuario cree tareas" — only meaningful for JEFE_AREA,
+    // ignored (stored as false) for every other role.
+    canCreateTasks: z.boolean().optional(),
   })
   .refine((v) => v.role === 'ADMIN' || !!v.departmentId, {
     message: 'A department is required for this role',
@@ -48,15 +51,40 @@ export const notificationPreferencesSchema = z
     { message: 'Set both quiet-hours ends, or clear both', path: ['quietHoursStart'] },
   );
 
+const profileFields = {
+  displayName: z.string().trim().min(1).max(100),
+  phoneNumber: phoneSchema.nullable(),
+  timezone: z.string().refine(isValidTimeZone, 'Unknown IANA timezone'),
+  notificationPreferences: notificationPreferencesSchema,
+};
+
+// PATCH /users/:id — ADMIN manages any member, including role, department and
+// the JEFE_AREA task-creation grant.
 export const updateUserSchema = z
   .object({
-    displayName: z.string().trim().min(1).max(100),
+    ...profileFields,
     role: roleSchema,
     departmentId: z.string().uuid().nullable(),
-    phoneNumber: phoneSchema.nullable(),
-    timezone: z.string().refine(isValidTimeZone, 'Unknown IANA timezone'),
-    notificationPreferences: notificationPreferencesSchema,
+    canCreateTasks: z.boolean(),
   })
   .partial()
   .refine((v) => Object.keys(v).length > 0, 'Nothing to update');
 export type UpdateUserInput = z.infer<typeof updateUserSchema>;
+
+// PATCH /users/:id/profile — the user themself. `.strict()` turns an attempt to
+// send role / departmentId / canCreateTasks into a validation error, not a silent no-op.
+export const updateProfileSchema = z
+  .object({
+    ...profileFields,
+    email: emailSchema,
+    // Changing the login email needs the current password.
+    currentPassword: z.string().min(1).max(200),
+  })
+  .partial()
+  .strict()
+  .refine((v) => Object.keys(v).some((k) => k !== 'currentPassword'), 'Nothing to update')
+  .refine((v) => !v.email || !!v.currentPassword, {
+    message: 'Enter your current password to change your email',
+    path: ['currentPassword'],
+  });
+export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;

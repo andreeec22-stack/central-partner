@@ -5,6 +5,7 @@ export interface AuthUser {
   workspaceId: string;
   sessionId: string;
   role: Role;
+  canCreateTasks: boolean;
   departmentId: string | null;
   email: string;
   displayName: string;

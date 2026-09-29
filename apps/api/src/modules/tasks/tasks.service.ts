@@ -2,6 +2,7 @@ import type { Prisma, Task } from '@prisma/client';
 import { AppError, forbidden, notFound, validationError } from '../../lib/errors';
 import {
   canCreateTaskIn,
+  canCreateTasks,
   canDeleteTask,
   canEditTask,
   canSeeDepartment,
@@ -311,13 +312,13 @@ export async function getTaskDetail(user: AuthUser, id: string) {
 // ─── Mutations ──────────────────────────────────────────────────────────────
 
 export async function createTask(user: AuthUser, input: CreateTaskInput, ctx: ClientContext) {
+  if (!canCreateTasks(user)) throw forbidden('No tienes permiso para crear tareas');
   const departmentId = input.departmentId ?? user.departmentId;
   if (!departmentId) {
     throw validationError('Choose a department for the task', [{ field: 'departmentId', message: 'required' }]);
   }
   if (!canCreateTaskIn(user, departmentId)) throw forbidden('You can only create tasks in your own department');
-  // Excel habit: people write their own tasks, so a USER's task defaults to themself.
-  const assignedToId = input.assignedTo !== undefined ? input.assignedTo : user.role === 'USER' ? user.id : null;
+  const assignedToId = input.assignedTo ?? null;
   const scope = await departmentScope(user);
 
   const task = await prisma.$transaction(async (tx) => {

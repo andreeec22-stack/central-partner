@@ -150,9 +150,9 @@ model Department {
   updatedAt   DateTime  @updatedAt
   deletedAt   DateTime?
 
-  workspace   Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  head        User?                   @relation("DepartmentHead", fields: [headId], references: [id], onDelete: SetNull)
-  members     User[]                  @relation("DepartmentMembers")
+  workspace   Workspace                 @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  head        User?                     @relation("DepartmentHead", fields: [headId], references: [id], onDelete: SetNull)
+  members     User[]                    @relation("DepartmentMembers")
   tasks       Task[]
   invitations Invitation[]
   snapshots   UserPerformanceSnapshot[]
@@ -164,41 +164,44 @@ model Department {
 }
 
 model User {
-  id           String    @id @default(uuid()) @db.Uuid
-  workspaceId  String    @db.Uuid
-  email        String    @db.VarChar(254)
-  passwordHash String
-  displayName  String    @db.VarChar(100)
-  role         Role      @default(USER)
-  departmentId String?   @db.Uuid
-  phoneNumber  String?   @db.VarChar(20)
+  id             String    @id @default(uuid()) @db.Uuid
+  workspaceId    String    @db.Uuid
+  email          String    @db.VarChar(254)
+  passwordHash   String
+  displayName    String    @db.VarChar(100)
+  role           Role      @default(USER)
+  // Task creation: ADMIN always; JEFE_AREA only when the director grants this;
+  // everyone else never. Always false for roles other than JEFE_AREA.
+  canCreateTasks Boolean   @default(false)
+  departmentId   String?   @db.Uuid
+  phoneNumber    String?   @db.VarChar(20)
   // IANA timezone (Gap 14). Single source of truth; preferences read it from here.
-  timezone     String    @default("UTC") @db.VarChar(50)
-  lastLoginAt  DateTime?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-  deletedAt    DateTime?
+  timezone       String    @default("UTC") @db.VarChar(50)
+  lastLoginAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
 
   workspace  Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   department Department? @relation("DepartmentMembers", fields: [departmentId], references: [id], onDelete: SetNull)
 
-  headOfDepartments   Department[]                 @relation("DepartmentHead")
-  sessions            Session[]
-  passwordResets      PasswordResetToken[]
-  invitationsSent     Invitation[]                 @relation("InvitedBy")
-  visibility          DepartmentVisibility?
-  notificationPrefs   UserNotificationPreferences?
-  assignedTasks       Task[]                       @relation("TaskAssignee")
-  createdTasks        Task[]                       @relation("TaskCreator")
-  blockedTasks        Task[]                       @relation("TaskBlocker")
-  comments            Comment[]
-  uploadedFiles       TaskFile[]
-  notifications       Notification[]
-  activityLogs        ActivityLog[]
-  excelImports        ExcelImport[]
+  headOfDepartments    Department[]                 @relation("DepartmentHead")
+  sessions             Session[]
+  passwordResets       PasswordResetToken[]
+  invitationsSent      Invitation[]                 @relation("InvitedBy")
+  visibility           DepartmentVisibility?
+  notificationPrefs    UserNotificationPreferences?
+  assignedTasks        Task[]                       @relation("TaskAssignee")
+  createdTasks         Task[]                       @relation("TaskCreator")
+  blockedTasks         Task[]                       @relation("TaskBlocker")
+  comments             Comment[]
+  uploadedFiles        TaskFile[]
+  notifications        Notification[]
+  activityLogs         ActivityLog[]
+  excelImports         ExcelImport[]
   performanceSnapshots UserPerformanceSnapshot[]
-  assignedTaskMetrics TaskPerformanceMetric[]      @relation("MetricAssignee")
-  createdTaskMetrics  TaskPerformanceMetric[]      @relation("MetricCreator")
+  assignedTaskMetrics  TaskPerformanceMetric[]      @relation("MetricAssignee")
+  createdTaskMetrics   TaskPerformanceMetric[]      @relation("MetricCreator")
 
   @@unique([workspaceId, email])
   @@index([email])
@@ -208,18 +211,20 @@ model User {
 
 // Confirmación D: invitation link valid for 24 hours. Only the token hash is stored.
 model Invitation {
-  id           String    @id @default(uuid()) @db.Uuid
-  workspaceId  String    @db.Uuid
-  email        String    @db.VarChar(254)
-  role         Role
-  departmentId String?   @db.Uuid
-  phoneNumber  String?   @db.VarChar(20)
-  tokenHash    String    @unique @db.VarChar(64)
-  expiresAt    DateTime
-  acceptedAt   DateTime?
-  revokedAt    DateTime?
-  invitedById  String    @db.Uuid
-  createdAt    DateTime  @default(now())
+  id             String    @id @default(uuid()) @db.Uuid
+  workspaceId    String    @db.Uuid
+  email          String    @db.VarChar(254)
+  role           Role
+  // Carried over to the user on acceptance (JEFE_AREA only).
+  canCreateTasks Boolean   @default(false)
+  departmentId   String?   @db.Uuid
+  phoneNumber    String?   @db.VarChar(20)
+  tokenHash      String    @unique @db.VarChar(64)
+  expiresAt      DateTime
+  acceptedAt     DateTime?
+  revokedAt      DateTime?
+  invitedById    String    @db.Uuid
+  createdAt      DateTime  @default(now())
 
   workspace  Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   department Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
@@ -282,12 +287,12 @@ model PasswordResetToken {
 // If a JEFE_AREA has a row here they see exactly visibleDepartmentIds (plus
 // their own); without a row they see only their own department.
 model DepartmentVisibility {
-  id                     String   @id @default(uuid()) @db.Uuid
-  workspaceId            String   @db.Uuid
-  jefeAreaId             String   @unique @db.Uuid
-  visibleDepartmentIds   String[] @db.Uuid
-  createdAt              DateTime @default(now())
-  updatedAt              DateTime @updatedAt
+  id                   String   @id @default(uuid()) @db.Uuid
+  workspaceId          String   @db.Uuid
+  jefeAreaId           String   @unique @db.Uuid
+  visibleDepartmentIds String[] @db.Uuid
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   jefeArea  User      @relation(fields: [jefeAreaId], references: [id], onDelete: Cascade)
@@ -320,32 +325,32 @@ model UserNotificationPreferences {
 // ─── Tasks ──────────────────────────────────────────────────────────────────
 
 model Task {
-  id              String         @id @default(uuid()) @db.Uuid
-  workspaceId     String         @db.Uuid
-  departmentId    String         @db.Uuid
+  id           String     @id @default(uuid()) @db.Uuid
+  workspaceId  String     @db.Uuid
+  departmentId String     @db.Uuid
   // Confirmación A: exactly one assignee.
-  assignedToId    String?        @db.Uuid
-  createdById     String         @db.Uuid
-  parentTaskId    String?        @db.Uuid
-  title           String         @db.VarChar(255)
-  description     String?
-  status          TaskStatus     @default(TODO)
-  priority        Priority       @default(MEDIUM)
-  progress        Int            @default(0)
+  assignedToId String?    @db.Uuid
+  createdById  String     @db.Uuid
+  parentTaskId String?    @db.Uuid
+  title        String     @db.VarChar(255)
+  description  String?
+  status       TaskStatus @default(TODO)
+  priority     Priority   @default(MEDIUM)
+  progress     Int        @default(0)
   // Derived from progress on every write: >=90 GREEN, >=70 YELLOW, else RED.
-  semaphore       Semaphore      @default(RED)
-  dueDate         DateTime?
+  semaphore    Semaphore  @default(RED)
+  dueDate      DateTime?
 
-  blockReason     String?        @db.VarChar(255)
+  blockReason     String?   @db.VarChar(255)
   blockedSince    DateTime?
-  blockedByUserId String?        @db.Uuid
+  blockedByUserId String?   @db.Uuid
 
-  kpiTarget       String?        @db.VarChar(255)
-  kpiActual       String?        @db.VarChar(255)
-  kpiRecordedAt   DateTime?
+  kpiTarget     String?   @db.VarChar(255)
+  kpiActual     String?   @db.VarChar(255)
+  kpiRecordedAt DateTime?
 
-  sourceType      TaskSourceType @default(MANUAL)
-  excelImportId   String?        @db.Uuid
+  sourceType    TaskSourceType @default(MANUAL)
+  excelImportId String?        @db.Uuid
 
   // Performance extension
   actualStartDate             DateTime?
@@ -372,12 +377,12 @@ model Task {
   subTasks    Task[]       @relation("SubTasks")
   excelImport ExcelImport? @relation(fields: [excelImportId], references: [id], onDelete: SetNull)
 
-  dependencies TaskDependency[]        @relation("DependentTask")
-  dependents   TaskDependency[]        @relation("PrerequisiteTask")
-  comments     Comment[]
-  files        TaskFile[]
+  dependencies  TaskDependency[]       @relation("DependentTask")
+  dependents    TaskDependency[]       @relation("PrerequisiteTask")
+  comments      Comment[]
+  files         TaskFile[]
   notifications Notification[]
-  metric       TaskPerformanceMetric?
+  metric        TaskPerformanceMetric?
 
   @@index([workspaceId, deletedAt, departmentId, status])
   @@index([workspaceId, assignedToId])

@@ -87,39 +87,57 @@ describe('invite flow (register → invite → accept → login)', () => {
 });
 
 describe('updating users', () => {
-  it('lets people edit their own profile but not their role or department', async () => {
-    const own = await call('PATCH', `/api/v1/users/${s.mkt.user.id}`, {
-      token: s.mkt.user.token,
-      body: { displayName: 'Ana María', timezone: 'America/Bogota' },
-    });
+  const profile = (actor: { id: string; token: string }, body: unknown, id = actor.id) =>
+    call('PATCH', `/api/v1/users/${id}/profile`, { token: actor.token, body });
+
+  it('people edit their own profile via /profile', async () => {
+    const own = await profile(s.mkt.user, { displayName: 'Ana María', timezone: 'America/Bogota' });
     expect(own.status).toBe(200);
     expect(own.body.user).toMatchObject({ displayName: 'Ana María', timezone: 'America/Bogota' });
+    expect((await profile(s.mkt.user, { timezone: 'Mars/Base' })).status).toBe(422);
+    expect((await profile(s.mkt.user, { displayName: 'x' }, s.mkt.user2.id)).status).toBe(403);
+  });
 
-    expect((await call('PATCH', `/api/v1/users/${s.mkt.user.id}`, { token: s.mkt.user.token, body: { role: 'ADMIN' } })).status).toBe(403);
-    expect((await call('PATCH', `/api/v1/users/${s.mkt.user2.id}`, { token: s.mkt.user.token, body: { displayName: 'x' } })).status).toBe(403);
-    expect((await call('PATCH', `/api/v1/users/${s.mkt.user.id}`, { token: s.mkt.user.token, body: { timezone: 'Mars/Base' } })).status).toBe(422);
+  it('nobody can change their own role, department or task permission', async () => {
+    for (const body of [{ role: 'ADMIN' }, { departmentId: s.finanzas }, { canCreateTasks: true }]) {
+      expect((await profile(s.mkt.jefeNoGrant, body)).status).toBe(403);
+      // The admin endpoint is closed to non-admins too.
+      expect((await call('PATCH', `/api/v1/users/${s.mkt.jefeNoGrant.id}`, { token: s.mkt.jefeNoGrant.token, body })).status).toBe(403);
+    }
+    const row = await prisma.user.findUniqueOrThrow({ where: { id: s.mkt.jefeNoGrant.id } });
+    expect(row).toMatchObject({ role: 'JEFE_AREA', departmentId: s.marketing, canCreateTasks: false });
+  });
+
+  it('changing the login email needs the current password and a free address', async () => {
+    expect((await profile(s.mkt.user, { email: 'ana.nueva@empresa.com' })).status).toBe(422);
+    expect((await profile(s.mkt.user, { email: 'ana.nueva@empresa.com', currentPassword: 'incorrecta' })).status).toBe(422);
+    const taken = await profile(s.mkt.user, { email: 'luis.mkt@empresa.com', currentPassword: 'secreto-123' });
+    expect(taken.body.error.code).toBe('EMAIL_TAKEN');
+    const ok = await profile(s.mkt.user, { email: 'Ana.Nueva@empresa.com', currentPassword: 'secreto-123' });
+    expect(ok.body.user.email).toBe('ana.nueva@empresa.com');
+    expect((await call('POST', '/api/v1/auth/login', { body: { email: 'ana.nueva@empresa.com', password: 'secreto-123' } })).status).toBe(200);
   });
 
   it('role changes apply immediately to existing tokens', async () => {
     expect((await call('POST', '/api/v1/tasks', { token: s.mkt.viewer.token, body: { title: 'x' } })).status).toBe(403);
-    await call('PATCH', `/api/v1/users/${s.mkt.viewer.id}`, { token: s.admin.token, body: { role: 'USER' } });
+    await call('PATCH', `/api/v1/users/${s.mkt.viewer.id}`, { token: s.admin.token, body: { role: 'JEFE_AREA', canCreateTasks: true } });
     expect((await call('POST', '/api/v1/tasks', { token: s.mkt.viewer.token, body: { title: 'x' } })).status).toBe(201);
   });
 
   it('WhatsApp notifications need a phone number; quiet hours come in pairs', async () => {
-    const noPhone = await call('PATCH', `/api/v1/users/${s.mkt.user.id}`, {
+    const noPhone = await call('PATCH', `/api/v1/users/${s.mkt.user.id}/profile`, {
       token: s.mkt.user.token,
       body: { notificationPreferences: { enableWhatsApp: true } },
     });
     expect(noPhone.status).toBe(422);
 
-    const half = await call('PATCH', `/api/v1/users/${s.mkt.user.id}`, {
+    const half = await call('PATCH', `/api/v1/users/${s.mkt.user.id}/profile`, {
       token: s.mkt.user.token,
       body: { notificationPreferences: { quietHoursStart: '22:00' } },
     });
     expect(half.status).toBe(422);
 
-    const ok = await call('PATCH', `/api/v1/users/${s.mkt.user.id}`, {
+    const ok = await call('PATCH', `/api/v1/users/${s.mkt.user.id}/profile`, {
       token: s.mkt.user.token,
       body: {
         phoneNumber: '+573001112233',
@@ -147,6 +165,62 @@ describe('updating users', () => {
     expect(luis.phoneNumber).toBeUndefined();
     const asAdmin = await call('GET', `/api/v1/users?search=luis`, { token: s.admin.token });
     expect(asAdmin.body.data[0].phoneNumber).toBe('+573009998877');
+  });
+});
+
+describe('JEFE_AREA task-creation permission (can_create_tasks)', () => {
+  async function inviteAndAccept(body: Record<string, unknown>) {
+    const inv = await call('POST', '/api/v1/users/invite', { token: s.admin.token, body: { departmentId: s.marketing, ...body } });
+    expect(inv.status).toBe(201);
+    const { token } = tokenFromMail();
+    const acc = await call('POST', '/api/v1/users/accept-invite', { body: { token, password: 'mi-clave-123', displayName: 'Nuevo' } });
+    expect(acc.status).toBe(201);
+    return acc.body;
+  }
+
+  it('an invited JEFE_AREA with the box checked can create tasks', async () => {
+    const jefe = await inviteAndAccept({ email: 'jefe.nuevo@empresa.com', role: 'JEFE_AREA', canCreateTasks: true });
+    expect(jefe.user.canCreateTasks).toBe(true);
+    expect((await call('POST', '/api/v1/tasks', { token: jefe.accessToken, body: { title: 'Primera' } })).status).toBe(201);
+  });
+
+  it('an invited JEFE_AREA with the box unchecked cannot', async () => {
+    const jefe = await inviteAndAccept({ email: 'jefe.sin@empresa.com', role: 'JEFE_AREA' });
+    expect(jefe.user.canCreateTasks).toBe(false);
+    expect((await call('POST', '/api/v1/tasks', { token: jefe.accessToken, body: { title: 'x' } })).status).toBe(403);
+  });
+
+  it('the checkbox is ignored for other roles', async () => {
+    const user = await inviteAndAccept({ email: 'usuario@empresa.com', role: 'USER', canCreateTasks: true });
+    expect(user.user.canCreateTasks).toBe(false);
+    expect((await call('POST', '/api/v1/tasks', { token: user.accessToken, body: { title: 'x' } })).status).toBe(403);
+
+    await call('PATCH', `/api/v1/users/${s.mkt.user.id}`, { token: s.admin.token, body: { canCreateTasks: true } });
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: s.mkt.user.id } })).canCreateTasks).toBe(false);
+  });
+
+  it('demoting a JEFE_AREA clears the grant; promoting again does not restore it silently', async () => {
+    await call('PATCH', `/api/v1/users/${s.mkt.jefe.id}`, { token: s.admin.token, body: { role: 'USER' } });
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: s.mkt.jefe.id } })).canCreateTasks).toBe(false);
+    await call('PATCH', `/api/v1/users/${s.mkt.jefe.id}`, { token: s.admin.token, body: { role: 'JEFE_AREA' } });
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: s.mkt.jefe.id } })).canCreateTasks).toBe(false);
+  });
+
+  it('the grant is audited and exposed to the frontend', async () => {
+    await call('PATCH', `/api/v1/users/${s.mkt.jefeNoGrant.id}`, { token: s.admin.token, body: { canCreateTasks: true } });
+    const log = await prisma.activityLog.findFirst({ where: { action: 'USER_UPDATED', entityId: s.mkt.jefeNoGrant.id } });
+    expect(log?.changes).toEqual({ canCreateTasks: { old: false, new: true } });
+
+    const me = await call('GET', '/api/v1/auth/me', { token: s.mkt.jefeNoGrant.token });
+    expect(me.body.user.canCreateTasks).toBe(true);
+    const admin = await call('GET', '/api/v1/auth/me', { token: s.admin.token });
+    expect(admin.body.user.canCreateTasks).toBe(true); // ADMIN always can
+  });
+
+  it('the database refuses the grant on any role but JEFE_AREA', async () => {
+    await expect(prisma.user.update({ where: { id: s.mkt.user.id }, data: { canCreateTasks: true } })).rejects.toThrow(
+      /users_can_create_tasks_jefe_only/,
+    );
   });
 });
 

@@ -10,7 +10,8 @@ export const taskRoutes = new Hono<AppEnv>()
   .use('*', requireAuth)
   .get('/', async (c) => c.json(await tasks.listTasks(c.get('user'), parseQuery(c, listTasksSchema))))
 
-  .post('/', requireRole('ADMIN', 'JEFE_AREA', 'USER'), async (c) => {
+  // Role gate here; the canCreateTasks grant for JEFE_AREA is checked in the service.
+  .post('/', requireRole('ADMIN', 'JEFE_AREA'), async (c) => {
     const input = await parseJson(c, createTaskSchema);
     return c.json(await tasks.createTask(c.get('user'), input, clientContext(c)), 201);
   })

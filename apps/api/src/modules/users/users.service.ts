@@ -4,7 +4,7 @@ import { generateOpaqueToken, sha256 } from '../../lib/crypto';
 import { conflict, forbidden, notFound, validationError } from '../../lib/errors';
 import { logger } from '../../lib/logger';
 import { sendMail } from '../../lib/mailer';
-import { hashPassword } from '../../lib/password';
+import { hashPassword, verifyPassword } from '../../lib/password';
 import { invalidatePermissions } from '../../lib/permissions';
 import { prisma, type Tx } from '../../lib/prisma';
 import { disconnectUser } from '../../lib/realtime';
@@ -12,7 +12,7 @@ import { refreshUserRooms } from '../../realtime/socket-server';
 import type { AuthUser } from '../../types';
 import { ActivityAction, diffFields, logActivity } from '../audit/activity-log';
 import { startSession, toPublicUser, toPublicWorkspace, type ClientContext } from '../auth/auth.service';
-import type { AcceptInviteInput, InviteInput, UpdateUserInput } from './users.schemas';
+import type { AcceptInviteInput, InviteInput, UpdateProfileInput, UpdateUserInput } from './users.schemas';
 
 // Confirmación D: invitation links expire after 24 hours.
 const INVITE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -30,6 +30,7 @@ const userSelect = {
   email: true,
   displayName: true,
   role: true,
+  canCreateTasks: true,
   departmentId: true,
   phoneNumber: true,
   timezone: true,
@@ -49,6 +50,7 @@ function present(row: UserRow, viewer: AuthUser) {
     email: row.email,
     displayName: row.displayName,
     role: row.role,
+    canCreateTasks: row.role === 'ADMIN' || row.canCreateTasks,
     departmentId: row.departmentId,
     department: row.department,
     timezone: row.timezone,
@@ -65,6 +67,11 @@ async function assertDepartment(db: Tx, workspaceId: string, departmentId: strin
 async function assertNotLastAdmin(db: Tx, workspaceId: string, userId: string) {
   const otherAdmins = await db.user.count({ where: { workspaceId, role: 'ADMIN', deletedAt: null, id: { not: userId } } });
   if (otherAdmins === 0) throw conflict('The workspace must keep at least one administrator', 'LAST_ADMIN');
+}
+
+// The task-creation grant only exists for JEFE_AREA; any other role stores false.
+function grantFor(role: Role, requested: boolean | undefined): boolean {
+  return role === 'JEFE_AREA' && requested === true;
 }
 
 export async function listUsers(
@@ -124,6 +131,7 @@ export async function inviteUser(admin: AuthUser, input: InviteInput, ctx: Clien
         workspaceId: admin.workspaceId,
         email: input.email,
         role: input.role,
+        canCreateTasks: grantFor(input.role, input.canCreateTasks),
         departmentId: input.departmentId ?? null,
         phoneNumber: input.phoneNumber ?? null,
         tokenHash: sha256(token),
@@ -138,7 +146,12 @@ export async function inviteUser(admin: AuthUser, input: InviteInput, ctx: Clien
         action: ActivityAction.USER_INVITED,
         entityType: 'Invitation',
         entityId: invitation.id,
-        metadata: { email: input.email, role: input.role, departmentId: input.departmentId ?? null },
+        metadata: {
+          email: input.email,
+          role: input.role,
+          departmentId: input.departmentId ?? null,
+          canCreateTasks: grantFor(input.role, input.canCreateTasks),
+        },
         ipAddress: ctx.ipAddress,
       },
       tx,
@@ -162,7 +175,7 @@ export async function inviteUser(admin: AuthUser, input: InviteInput, ctx: Clien
 export async function listPendingInvitations(admin: AuthUser) {
   const rows = await prisma.invitation.findMany({
     where: { workspaceId: admin.workspaceId, acceptedAt: null, revokedAt: null, expiresAt: { gt: new Date() } },
-    select: { id: true, email: true, role: true, departmentId: true, expiresAt: true, createdAt: true },
+    select: { id: true, email: true, role: true, canCreateTasks: true, departmentId: true, expiresAt: true, createdAt: true },
     orderBy: { createdAt: 'desc' },
   });
   return { data: rows };
@@ -224,6 +237,7 @@ export async function acceptInvitation(input: AcceptInviteInput, ctx: ClientCont
         passwordHash,
         displayName: input.displayName,
         role: invitation.role,
+        canCreateTasks: grantFor(invitation.role, invitation.canCreateTasks),
         departmentId: departmentStillActive ? invitation.departmentId : null,
         phoneNumber: invitation.phoneNumber,
         lastLoginAt: new Date(),
@@ -237,7 +251,7 @@ export async function acceptInvitation(input: AcceptInviteInput, ctx: ClientCont
         action: ActivityAction.INVITATION_ACCEPTED,
         entityType: 'User',
         entityId: user.id,
-        metadata: { invitationId: invitation.id, role: user.role, departmentId: user.departmentId },
+        metadata: { invitationId: invitation.id, role: user.role, departmentId: user.departmentId, canCreateTasks: user.canCreateTasks },
         ipAddress: ctx.ipAddress,
       },
       tx,
@@ -247,35 +261,45 @@ export async function acceptInvitation(input: AcceptInviteInput, ctx: ClientCont
   });
 }
 
-export async function updateUser(actor: AuthUser, userId: string, input: UpdateUserInput, ctx: ClientContext) {
-  const isAdmin = actor.role === 'ADMIN';
-  const isSelf = actor.id === userId;
-  if (!isAdmin && !isSelf) throw forbidden();
-  // Confirmación B: only ADMIN changes role or department.
-  if (!isAdmin && (input.role !== undefined || input.departmentId !== undefined)) {
-    throw forbidden('Only an administrator can change role or department');
-  }
+type UserFields = Omit<UpdateUserInput, 'notificationPreferences'> & { email?: string };
+type PreferencesInput = UpdateUserInput['notificationPreferences'];
 
-  const { notificationPreferences: prefs, ...fields } = input;
-
+// Shared write path for admin edits and self-service profile edits: validation,
+// the write itself, and audit entries for user fields and preferences.
+async function applyUserUpdate(
+  actor: AuthUser,
+  userId: string,
+  fields: UserFields,
+  prefs: PreferencesInput,
+  ctx: ClientContext,
+  guard?: (tx: Tx, target: { email: string; passwordHash: string }) => Promise<void>,
+) {
   const { updated, accessChanged } = await prisma.$transaction(async (tx) => {
     const target = await tx.user.findFirst({
       where: { id: userId, workspaceId: actor.workspaceId, deletedAt: null },
       include: { notificationPrefs: true },
     });
     if (!target) throw notFound('User');
+    await guard?.(tx, target);
 
     if (fields.role && fields.role !== 'ADMIN' && target.role === 'ADMIN') await assertNotLastAdmin(tx, actor.workspaceId, userId);
     await assertDepartment(tx, actor.workspaceId, fields.departmentId);
 
-    const phoneAfter = fields.phoneNumber !== undefined ? fields.phoneNumber : target.phoneNumber;
+    // Keep the grant consistent with the role: it only survives on a JEFE_AREA.
+    const roleAfter = fields.role ?? target.role;
+    const data: UserFields = { ...fields };
+    if (roleAfter !== 'JEFE_AREA' && (target.canCreateTasks || fields.canCreateTasks !== undefined)) {
+      data.canCreateTasks = false;
+    }
+
+    const phoneAfter = data.phoneNumber !== undefined ? data.phoneNumber : target.phoneNumber;
     const whatsAppAfter = prefs?.enableWhatsApp ?? target.notificationPrefs?.enableWhatsApp ?? false;
     if (whatsAppAfter && !phoneAfter) {
       throw validationError('WhatsApp notifications need a phone number', [{ field: 'phoneNumber', message: 'required' }]);
     }
 
-    const changes = diffFields(target as unknown as Record<string, unknown>, fields);
-    const updated = await tx.user.update({ where: { id: userId }, data: fields, select: userSelect });
+    const changes = diffFields(target as unknown as Record<string, unknown>, data);
+    const updated = await tx.user.update({ where: { id: userId }, data, select: userSelect });
 
     if (prefs) {
       const prefsData = {
@@ -327,6 +351,33 @@ export async function updateUser(actor: AuthUser, userId: string, input: UpdateU
     await refreshUserRooms(userId);
   }
   return { user: present(updated, actor) };
+}
+
+// PATCH /users/:id — ADMIN only (Confirmación B): role, department, the
+// JEFE_AREA task-creation grant, and any profile field.
+export async function updateUser(admin: AuthUser, userId: string, input: UpdateUserInput, ctx: ClientContext) {
+  if (admin.role !== 'ADMIN') throw forbidden();
+  const { notificationPreferences, ...fields } = input;
+  return applyUserUpdate(admin, userId, fields, notificationPreferences, ctx);
+}
+
+// PATCH /users/:id/profile — the user themself: name, email, phone, timezone,
+// notification preferences. Never role, department or permissions.
+export async function updateProfile(actor: AuthUser, userId: string, input: UpdateProfileInput, ctx: ClientContext) {
+  if (actor.id !== userId) throw forbidden('You can only edit your own profile');
+  const { notificationPreferences, currentPassword, ...fields } = input;
+
+  return applyUserUpdate(actor, userId, fields, notificationPreferences, ctx, async (tx, target) => {
+    if (!fields.email || fields.email === target.email) return;
+    if (!currentPassword || !(await verifyPassword(currentPassword, target.passwordHash))) {
+      throw validationError('Current password is incorrect', [{ field: 'currentPassword', message: 'incorrect' }]);
+    }
+    const taken = await tx.user.findUnique({
+      where: { workspaceId_email: { workspaceId: actor.workspaceId, email: fields.email } },
+      select: { id: true },
+    });
+    if (taken) throw conflict('That email is already used in this workspace', 'EMAIL_TAKEN');
+  });
 }
 
 export async function deleteUser(admin: AuthUser, userId: string, ctx: ClientContext) {

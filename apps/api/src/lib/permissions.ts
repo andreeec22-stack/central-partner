@@ -10,6 +10,7 @@ import { prisma } from './prisma';
 export type DepartmentScope = { all: true } | { all: false; departmentIds: string[] };
 
 type ScopeUser = Pick<AuthUser, 'id' | 'role' | 'departmentId' | 'workspaceId'>;
+type CreatorUser = ScopeUser & Pick<AuthUser, 'canCreateTasks'>;
 
 const PERMISSION_TTL_SECONDS = 60 * 60;
 
@@ -50,11 +51,17 @@ interface TaskRef {
   createdById: string;
 }
 
-// Tasks can be created in the user's own department (ADMIN: anywhere).
-export function canCreateTaskIn(user: ScopeUser, departmentId: string): boolean {
+// Who may create tasks at all: ADMIN always; JEFE_AREA only with the
+// director's canCreateTasks grant; USER and VIEWER never.
+export function canCreateTasks(user: Pick<AuthUser, 'role' | 'canCreateTasks'>): boolean {
   if (user.role === 'ADMIN') return true;
-  if (isReadOnlyRole(user.role)) return false;
-  return user.departmentId === departmentId;
+  return user.role === 'JEFE_AREA' && user.canCreateTasks;
+}
+
+// ...and where: ADMIN anywhere, a granted JEFE_AREA in their own department.
+export function canCreateTaskIn(user: CreatorUser, departmentId: string): boolean {
+  if (!canCreateTasks(user)) return false;
+  return user.role === 'ADMIN' || user.departmentId === departmentId;
 }
 
 // PATCH permission: Assignee | JEFE_AREA (own department) | ADMIN. The task's

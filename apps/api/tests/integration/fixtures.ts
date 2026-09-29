@@ -13,7 +13,13 @@ export interface Actor {
 
 let passwordHash: string | undefined;
 
-async function createUser(workspaceId: string, email: string, role: Role, departmentId: string | null): Promise<Actor> {
+async function createUser(
+  workspaceId: string,
+  email: string,
+  role: Role,
+  departmentId: string | null,
+  canCreateTasks = false,
+): Promise<Actor> {
   passwordHash ??= await hashPassword('secreto-123');
   const user = await prisma.user.create({
     data: {
@@ -22,6 +28,7 @@ async function createUser(workspaceId: string, email: string, role: Role, depart
       passwordHash,
       displayName: email.split('@')[0]!,
       role,
+      canCreateTasks,
       departmentId,
       notificationPrefs: { create: { workspaceId } },
     },
@@ -30,7 +37,9 @@ async function createUser(workspaceId: string, email: string, role: Role, depart
   return { id: user.id, token: accessToken, role, departmentId };
 }
 
-// Director (ADMIN) + two departments, each with a JEFE_AREA, a USER and a VIEWER.
+// Director (ADMIN) + two departments. Each has a JEFE_AREA the director allowed
+// to create tasks, plus USERs; Marketing also has a VIEWER and a JEFE_AREA
+// without the task-creation grant.
 export async function seedWorkspace() {
   const reg = await call('POST', '/api/v1/auth/register', {
     body: { email: 'director@empresa.com', password: 'secreto-123', workspaceName: 'Central Partner' },
@@ -53,13 +62,14 @@ export async function seedWorkspace() {
     marketing,
     finanzas,
     mkt: {
-      jefe: await createUser(workspaceId, 'jefe.mkt@empresa.com', 'JEFE_AREA', marketing),
+      jefe: await createUser(workspaceId, 'jefe.mkt@empresa.com', 'JEFE_AREA', marketing, true),
+      jefeNoGrant: await createUser(workspaceId, 'subjefe.mkt@empresa.com', 'JEFE_AREA', marketing),
       user: await createUser(workspaceId, 'ana.mkt@empresa.com', 'USER', marketing),
       user2: await createUser(workspaceId, 'luis.mkt@empresa.com', 'USER', marketing),
       viewer: await createUser(workspaceId, 'lector.mkt@empresa.com', 'VIEWER', marketing),
     },
     fin: {
-      jefe: await createUser(workspaceId, 'jefe.fin@empresa.com', 'JEFE_AREA', finanzas),
+      jefe: await createUser(workspaceId, 'jefe.fin@empresa.com', 'JEFE_AREA', finanzas, true),
       user: await createUser(workspaceId, 'carla.fin@empresa.com', 'USER', finanzas),
     },
   };
