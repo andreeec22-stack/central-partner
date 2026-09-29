@@ -1,0 +1,607 @@
+// Central Partner — data model (spec v1.1, Parte 4).
+// Multi-tenancy: every tenant-owned table carries workspaceId; the API scopes
+// every query by it. Soft delete: deletedAt NULL = active.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ──────────────────────────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  JEFE_AREA
+  USER
+  VIEWER
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  BLOCKED
+  DONE
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum Semaphore {
+  GREEN
+  YELLOW
+  RED
+}
+
+enum TaskSourceType {
+  MANUAL
+  EXCEL_IMPORT
+}
+
+enum ExcelImportStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum SnapshotPeriod {
+  DAILY
+  WEEKLY
+  MONTHLY
+  QUARTERLY
+}
+
+enum ComplexityCategory {
+  SIMPLE
+  STANDARD
+  COMPLEX
+  CRITICAL
+}
+
+enum DeadlineAdherence {
+  EARLY
+  ON_TIME
+  LATE
+  NO_DEADLINE
+}
+
+enum NotificationType {
+  TASK_ASSIGNED
+  MENTIONED
+  COMMENT_REPLY
+  TASK_BLOCKED
+  TASK_COMPLETED
+  KPI_REMINDER
+}
+
+// ─── Workspace & branding ───────────────────────────────────────────────────
+
+model Workspace {
+  id                  String    @id @default(uuid()) @db.Uuid
+  name                String    @db.VarChar(50)
+  slug                String    @unique @db.VarChar(80)
+  // Confirmación E: soft delete + 30-day grace period before hard delete.
+  deleteRequestedAt   DateTime?
+  deleteRequestedById String?   @db.Uuid
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  deletedAt           DateTime?
+
+  branding             WorkspaceBranding?
+  departments          Department[]
+  users                User[]
+  invitations          Invitation[]
+  sessions             Session[]
+  departmentVisibility DepartmentVisibility[]
+  notificationPrefs    UserNotificationPreferences[]
+  tasks                Task[]
+  taskDependencies     TaskDependency[]
+  comments             Comment[]
+  files                TaskFile[]
+  notifications        Notification[]
+  activityLogs         ActivityLog[]
+  weeklyArchives       WeeklyArchive[]
+  excelImports         ExcelImport[]
+  performanceSnapshots UserPerformanceSnapshot[]
+  taskMetrics          TaskPerformanceMetric[]
+  webhooks             Webhook[]
+
+  @@map("workspaces")
+}
+
+model WorkspaceBranding {
+  id            String   @id @default(uuid()) @db.Uuid
+  workspaceId   String   @unique @db.Uuid
+  logoUrl       String?
+  colorPrimary  String   @default("#2563EB") @db.VarChar(7)
+  colorSuccess  String   @default("#10B981") @db.VarChar(7)
+  colorWarning  String   @default("#F59E0B") @db.VarChar(7)
+  colorDanger   String   @default("#EF4444") @db.VarChar(7)
+  workspaceName String   @default("Central Partner") @db.VarChar(50)
+  tagline       String?  @db.VarChar(100)
+  createdAt     DateTime @default(now())
+  // Last-Write-Wins key for concurrent branding edits (Gap 2).
+  updatedAt     DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@map("workspace_branding")
+}
+
+// ─── Departments & users ────────────────────────────────────────────────────
+
+model Department {
+  id          String    @id @default(uuid()) @db.Uuid
+  workspaceId String    @db.Uuid
+  name        String    @db.VarChar(80)
+  slug        String    @db.VarChar(100)
+  color       String?   @db.VarChar(7)
+  description String?   @db.VarChar(500)
+  headId      String?   @db.Uuid
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  workspace   Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  head        User?                   @relation("DepartmentHead", fields: [headId], references: [id], onDelete: SetNull)
+  members     User[]                  @relation("DepartmentMembers")
+  tasks       Task[]
+  invitations Invitation[]
+  snapshots   UserPerformanceSnapshot[]
+  taskMetrics TaskPerformanceMetric[]
+
+  @@unique([workspaceId, slug])
+  @@index([workspaceId, deletedAt])
+  @@map("departments")
+}
+
+model User {
+  id           String    @id @default(uuid()) @db.Uuid
+  workspaceId  String    @db.Uuid
+  email        String    @db.VarChar(254)
+  passwordHash String
+  displayName  String    @db.VarChar(100)
+  role         Role      @default(USER)
+  departmentId String?   @db.Uuid
+  phoneNumber  String?   @db.VarChar(20)
+  // IANA timezone (Gap 14). Single source of truth; preferences read it from here.
+  timezone     String    @default("UTC") @db.VarChar(50)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+
+  workspace  Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  department Department? @relation("DepartmentMembers", fields: [departmentId], references: [id], onDelete: SetNull)
+
+  headOfDepartments   Department[]                 @relation("DepartmentHead")
+  sessions            Session[]
+  passwordResets      PasswordResetToken[]
+  invitationsSent     Invitation[]                 @relation("InvitedBy")
+  visibility          DepartmentVisibility?
+  notificationPrefs   UserNotificationPreferences?
+  assignedTasks       Task[]                       @relation("TaskAssignee")
+  createdTasks        Task[]                       @relation("TaskCreator")
+  blockedTasks        Task[]                       @relation("TaskBlocker")
+  comments            Comment[]
+  uploadedFiles       TaskFile[]
+  notifications       Notification[]
+  activityLogs        ActivityLog[]
+  excelImports        ExcelImport[]
+  performanceSnapshots UserPerformanceSnapshot[]
+  assignedTaskMetrics TaskPerformanceMetric[]      @relation("MetricAssignee")
+  createdTaskMetrics  TaskPerformanceMetric[]      @relation("MetricCreator")
+
+  @@unique([workspaceId, email])
+  @@index([email])
+  @@index([workspaceId, departmentId])
+  @@map("users")
+}
+
+// Confirmación D: invitation link valid for 24 hours. Only the token hash is stored.
+model Invitation {
+  id           String    @id @default(uuid()) @db.Uuid
+  workspaceId  String    @db.Uuid
+  email        String    @db.VarChar(254)
+  role         Role
+  departmentId String?   @db.Uuid
+  phoneNumber  String?   @db.VarChar(20)
+  tokenHash    String    @unique @db.VarChar(64)
+  expiresAt    DateTime
+  acceptedAt   DateTime?
+  revokedAt    DateTime?
+  invitedById  String    @db.Uuid
+  createdAt    DateTime  @default(now())
+
+  workspace  Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  department Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  invitedBy  User        @relation("InvitedBy", fields: [invitedById], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, email])
+  @@map("invitations")
+}
+
+// A login session. Access tokens carry the session id, so revoking the session
+// (logout, password reset) invalidates them immediately.
+model Session {
+  id          String    @id @default(uuid()) @db.Uuid
+  userId      String    @db.Uuid
+  workspaceId String    @db.Uuid
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  lastUsedAt  DateTime  @default(now())
+  userAgent   String?   @db.VarChar(255)
+  ipAddress   String?   @db.VarChar(64)
+  createdAt   DateTime  @default(now())
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace     Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  refreshTokens RefreshToken[]
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+// Rotating refresh tokens. Presenting an already-used token = reuse → session revoked.
+model RefreshToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  sessionId String    @db.Uuid
+  tokenHash String    @unique @db.VarChar(64)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@map("refresh_tokens")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  tokenHash String    @unique @db.VarChar(64)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+// If a JEFE_AREA has a row here they see exactly visibleDepartmentIds (plus
+// their own); without a row they see only their own department.
+model DepartmentVisibility {
+  id                     String   @id @default(uuid()) @db.Uuid
+  workspaceId            String   @db.Uuid
+  jefeAreaId             String   @unique @db.Uuid
+  visibleDepartmentIds   String[] @db.Uuid
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  jefeArea  User      @relation(fields: [jefeAreaId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, jefeAreaId])
+  @@map("department_visibility")
+}
+
+model UserNotificationPreferences {
+  id              String   @id @default(uuid()) @db.Uuid
+  workspaceId     String   @db.Uuid
+  userId          String   @unique @db.Uuid
+  enableWhatsApp  Boolean  @default(false)
+  // Per-event WhatsApp toggles, e.g. { "MENTIONED": true, "TASK_BLOCKED": false }.
+  // Missing key = enabled.
+  whatsAppEvents  Json     @default("{}")
+  // "HH:mm" in the user's timezone; both null = no quiet hours (21:00 cutoff still applies).
+  quietHoursStart String?  @db.VarChar(5)
+  quietHoursEnd   String?  @db.VarChar(5)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@map("user_notification_preferences")
+}
+
+// ─── Tasks ──────────────────────────────────────────────────────────────────
+
+model Task {
+  id              String         @id @default(uuid()) @db.Uuid
+  workspaceId     String         @db.Uuid
+  departmentId    String         @db.Uuid
+  // Confirmación A: exactly one assignee.
+  assignedToId    String?        @db.Uuid
+  createdById     String         @db.Uuid
+  parentTaskId    String?        @db.Uuid
+  title           String         @db.VarChar(255)
+  description     String?
+  status          TaskStatus     @default(TODO)
+  priority        Priority       @default(MEDIUM)
+  progress        Int            @default(0)
+  // Derived from progress on every write: >=90 GREEN, >=70 YELLOW, else RED.
+  semaphore       Semaphore      @default(RED)
+  dueDate         DateTime?
+
+  blockReason     String?        @db.VarChar(255)
+  blockedSince    DateTime?
+  blockedByUserId String?        @db.Uuid
+
+  kpiTarget       String?        @db.VarChar(255)
+  kpiActual       String?        @db.VarChar(255)
+  kpiRecordedAt   DateTime?
+
+  sourceType      TaskSourceType @default(MANUAL)
+  excelImportId   String?        @db.Uuid
+
+  // Performance extension
+  actualStartDate             DateTime?
+  actualCompletionDate        DateTime?
+  actualDurationHours         Float?
+  timeToCompletionHours       Float?
+  completionDelayDays         Float?
+  wasBlocked                  Boolean   @default(false)
+  totalCommentsCount          Int       @default(0)
+  totalMentionsCount          Int       @default(0)
+  collaborationParticipantIds String[]  @db.Uuid
+  priorityAtCompletion        Priority?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  department  Department   @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  assignedTo  User?        @relation("TaskAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  createdBy   User         @relation("TaskCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  blockedBy   User?        @relation("TaskBlocker", fields: [blockedByUserId], references: [id], onDelete: SetNull)
+  parentTask  Task?        @relation("SubTasks", fields: [parentTaskId], references: [id], onDelete: SetNull)
+  subTasks    Task[]       @relation("SubTasks")
+  excelImport ExcelImport? @relation(fields: [excelImportId], references: [id], onDelete: SetNull)
+
+  dependencies TaskDependency[]        @relation("DependentTask")
+  dependents   TaskDependency[]        @relation("PrerequisiteTask")
+  comments     Comment[]
+  files        TaskFile[]
+  notifications Notification[]
+  metric       TaskPerformanceMetric?
+
+  @@index([workspaceId, deletedAt, departmentId, status])
+  @@index([workspaceId, assignedToId])
+  @@index([workspaceId, dueDate])
+  @@index([workspaceId, createdAt])
+  @@index([parentTaskId])
+  @@map("tasks")
+}
+
+// "taskId depends on dependsOnTaskId". Cycles are rejected in the API (Gap 8, DFS).
+model TaskDependency {
+  id              String   @id @default(uuid()) @db.Uuid
+  workspaceId     String   @db.Uuid
+  taskId          String   @db.Uuid
+  dependsOnTaskId String   @db.Uuid
+  createdAt       DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  task      Task      @relation("DependentTask", fields: [taskId], references: [id], onDelete: Cascade)
+  dependsOn Task      @relation("PrerequisiteTask", fields: [dependsOnTaskId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, dependsOnTaskId])
+  @@index([workspaceId])
+  @@map("task_dependencies")
+}
+
+model Comment {
+  id               String    @id @default(uuid()) @db.Uuid
+  workspaceId      String    @db.Uuid
+  taskId           String    @db.Uuid
+  authorId         String    @db.Uuid
+  content          String
+  mentionedUserIds String[]  @db.Uuid
+  editedAt         DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  deletedAt        DateTime?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  task      Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  author    User      @relation(fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@index([taskId, createdAt])
+  @@map("comments")
+}
+
+// Max 10 per task, 50MB per file (validated in the API).
+model TaskFile {
+  id           String    @id @default(uuid()) @db.Uuid
+  workspaceId  String    @db.Uuid
+  taskId       String    @db.Uuid
+  uploadedById String    @db.Uuid
+  filename     String    @db.VarChar(255)
+  mimeType     String    @db.VarChar(127)
+  sizeBytes    Int
+  storageKey   String    @db.VarChar(512)
+  createdAt    DateTime  @default(now())
+  // Soft-deleted with its task; hard-deleted by the weekly job after 90 days (Gap 9).
+  deletedAt    DateTime?
+
+  workspace  Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  task       Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  uploadedBy User      @relation(fields: [uploadedById], references: [id], onDelete: Restrict)
+
+  @@index([taskId])
+  @@index([deletedAt])
+  @@map("task_files")
+}
+
+// In-app notifications (badge + dropdown).
+model Notification {
+  id          String           @id @default(uuid()) @db.Uuid
+  workspaceId String           @db.Uuid
+  userId      String           @db.Uuid
+  type        NotificationType
+  title       String           @db.VarChar(255)
+  body        String?          @db.VarChar(1000)
+  taskId      String?          @db.Uuid
+  actorId     String?          @db.Uuid
+  readAt      DateTime?
+  createdAt   DateTime         @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task      Task?     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt])
+  @@map("notifications")
+}
+
+// ─── Audit & history ────────────────────────────────────────────────────────
+
+// who / what / when / old / new. Append-only.
+model ActivityLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  workspaceId String   @db.Uuid
+  userId      String?  @db.Uuid
+  action      String   @db.VarChar(64)
+  entityType  String   @db.VarChar(64)
+  entityId    String?  @db.Uuid
+  // { field: { old, new } }
+  changes     Json?
+  metadata    Json?
+  ipAddress   String?  @db.VarChar(64)
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, entityType, entityId])
+  @@index([workspaceId, userId])
+  @@map("activity_logs")
+}
+
+model WeeklyArchive {
+  id          String   @id @default(uuid()) @db.Uuid
+  workspaceId String   @db.Uuid
+  weekStart   DateTime @db.Date
+  weekEnd     DateTime @db.Date
+  // Snapshot of every task's progress/semaphore/KPI for the week, grouped by department.
+  data        Json
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, weekStart])
+  @@map("weekly_archives")
+}
+
+model ExcelImport {
+  id                String            @id @default(uuid()) @db.Uuid
+  workspaceId       String            @db.Uuid
+  uploadedById      String            @db.Uuid
+  filename          String            @db.VarChar(255)
+  fileKey           String            @db.VarChar(512)
+  uploadedAt        DateTime          @default(now())
+  rawData           Json
+  detectedTasks     Json
+  mappedTasksCount  Int               @default(0)
+  unmappedRowsCount Int               @default(0)
+  mappingLog        Json?
+  status            ExcelImportStatus @default(PENDING)
+  errorMessage      String?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  workspace  Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  uploadedBy User      @relation(fields: [uploadedById], references: [id], onDelete: Restrict)
+  tasks      Task[]
+
+  @@index([workspaceId, createdAt])
+  @@map("excel_imports")
+}
+
+// ─── Performance extension ──────────────────────────────────────────────────
+
+model UserPerformanceSnapshot {
+  id                      String         @id @default(uuid()) @db.Uuid
+  workspaceId             String         @db.Uuid
+  userId                  String         @db.Uuid
+  departmentId            String?        @db.Uuid
+  snapshotDate            DateTime       @default(now())
+  period                  SnapshotPeriod
+  tasksCompletedInPeriod  Int            @default(0)
+  tasksAssignedInPeriod   Int            @default(0)
+  onTimeCompletionRate    Float          @default(0)
+  lateCompletionRate      Float          @default(0)
+  avgTaskDurationHours    Float?
+  medianTaskDurationHours Float?
+  collaborationScore      Int            @default(0)
+  kpisRecorded            Int            @default(0)
+  overdueTasks            Int            @default(0)
+  blockedTasks            Int            @default(0)
+  commentsWritten         Int            @default(0)
+  isArchived              Boolean        @default(false)
+  createdAt               DateTime       @default(now())
+
+  workspace  Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  department Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+
+  @@unique([workspaceId, userId, snapshotDate, period])
+  @@index([workspaceId, period, snapshotDate])
+  @@map("user_performance_snapshots")
+}
+
+model TaskPerformanceMetric {
+  id                        String             @id @default(uuid()) @db.Uuid
+  taskId                    String             @unique @db.Uuid
+  workspaceId               String             @db.Uuid
+  departmentId              String?            @db.Uuid
+  completionEfficiencyScore Float
+  priorityImpact            Priority
+  complexityCategory        ComplexityCategory
+  deadlineAdherence         DeadlineAdherence
+  assignedUserId            String?            @db.Uuid
+  createdByUserId           String             @db.Uuid
+  createdAt                 DateTime           @default(now())
+  completedAt               DateTime
+  isArchived                Boolean            @default(false)
+
+  task         Task        @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  workspace    Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  department   Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  assignedUser User?       @relation("MetricAssignee", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  createdBy    User        @relation("MetricCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  @@index([workspaceId, completedAt])
+  @@map("task_performance_metrics")
+}
+
+// Reserved for Phase 2 (Gap 12). Structure only — nothing reads or writes it yet.
+model Webhook {
+  id          String   @id @default(uuid()) @db.Uuid
+  workspaceId String   @db.Uuid
+  url         String
+  events      String[]
+  secretKey   String   @db.VarChar(255)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@map("webhooks")
+}
