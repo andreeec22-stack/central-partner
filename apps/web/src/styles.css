@@ -1,0 +1,69 @@
+@import 'tailwindcss';
+
+/* Brand colors are runtime variables so Settings > Branding can override them
+   (Decisión 2). Semaphore colors are NOT brandable: they are fixed. */
+:root {
+  --cp-primary: #2563eb;
+  --cp-success: #10b981;
+  --cp-warning: #f59e0b;
+  --cp-danger: #ef4444;
+}
+
+@theme {
+  --font-sans: 'Manrope', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+
+  --color-paper: #f6f5f1;
+  --color-surface: #ffffff;
+  --color-sunken: #efede6;
+  --color-line: #e3e0d6;
+  --color-line-strong: #cfcabb;
+  --color-ink: #1b2130;
+  --color-ink-soft: #465063;
+  --color-muted: #7a8092;
+  --color-navy: #1f2a44;
+  --color-navy-soft: #2c3a5c;
+
+  --color-sem-green: #16a34a;
+  --color-sem-green-soft: #dcfce7;
+  --color-sem-yellow: #ca8a04;
+  --color-sem-yellow-soft: #fef9c3;
+  --color-sem-red: #dc2626;
+  --color-sem-red-soft: #fee2e2;
+  --color-blocked: #7c2d12;
+  --color-blocked-soft: #ffedd5;
+
+  --shadow-card: 0 1px 0 rgb(27 33 48 / 0.04), 0 1px 3px rgb(27 33 48 / 0.06);
+  --shadow-pop: 0 12px 32px -8px rgb(27 33 48 / 0.25);
+}
+
+@theme inline {
+  --color-brand: var(--cp-primary);
+  --color-success: var(--cp-success);
+  --color-warning: var(--cp-warning);
+  --color-danger: var(--cp-danger);
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    @apply bg-paper text-ink font-sans antialiased;
+    font-feature-settings: 'cv11', 'ss01';
+  }
+  :focus-visible {
+    outline: 2px solid var(--cp-primary);
+    outline-offset: 2px;
+  }
+  dialog::backdrop {
+    background: rgb(27 33 48 / 0.45);
+    backdrop-filter: blur(2px);
+  }
+}
+
+@layer components {
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}

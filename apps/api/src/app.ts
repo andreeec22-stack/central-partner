@@ -8,6 +8,7 @@ import { errorHandler, notFoundHandler } from './middleware/error-handler';
 import { rateLimit } from './middleware/rate-limit';
 import { requestContext } from './middleware/request-context';
 import { authRoutes } from './modules/auth/auth.routes';
+import { dashboardRoutes } from './modules/dashboard/dashboard.routes';
 import { departmentRoutes } from './modules/departments/departments.routes';
 import { taskRoutes } from './modules/tasks/tasks.routes';
 import { publicUserRoutes, userRoutes } from './modules/users/users.routes';
@@ -46,6 +47,7 @@ export function createApp() {
   api.route('/users', userRoutes);
   api.route('/departments', departmentRoutes);
   api.route('/tasks', taskRoutes);
+  api.route('/dashboard', dashboardRoutes);
 
   app.route('/api/v1', api);
 
