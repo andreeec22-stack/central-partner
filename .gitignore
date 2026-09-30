@@ -7,3 +7,4 @@ coverage/
 *.log
 uploads/
 .DS_Store
+seed.ts.bak
