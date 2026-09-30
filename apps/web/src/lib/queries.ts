@@ -4,7 +4,6 @@ import type {
   Branding,
   BrandColors,
   Comment,
-  DashboardData,
   Department,
   ImportConfirmResult,
   ImportSummary,
@@ -17,7 +16,9 @@ import type {
   TaskDetail,
   TaskFile,
   TaskStatus,
+  TrendPoint,
   UserSummary,
+  WeekDashboard,
 } from './types';
 import { toast } from '../stores/toast';
 
@@ -196,10 +197,19 @@ export function useUsers(departmentId?: string, enabled = true) {
   });
 }
 
-export function useDashboard(departmentId?: string) {
+// "current" or a week id. Kept fresh by the socket (task/KPI/function/week events).
+export function useWeekDashboard(weekRef = 'current', departmentId?: string) {
   return useQuery({
-    queryKey: keys.dashboard(departmentId),
-    queryFn: ({ signal }) => api<DashboardData>('/dashboard', { signal, query: { departmentId } }),
+    queryKey: keys.dashboard(`${weekRef}:${departmentId ?? 'all'}`),
+    queryFn: ({ signal }) => api<WeekDashboard>(`/dashboard/week/${weekRef}`, { signal, query: { departmentId } }),
+  });
+}
+
+export function useTrends(weeks = 4, departmentId?: string) {
+  return useQuery({
+    queryKey: ['dashboard', 'trends', weeks, departmentId ?? 'all'] as const,
+    queryFn: ({ signal }) =>
+      api<{ data: TrendPoint[] }>('/dashboard/trends', { signal, query: { weeks, departmentId } }).then((r) => r.data),
   });
 }
 

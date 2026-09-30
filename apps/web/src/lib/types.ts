@@ -77,27 +77,74 @@ export interface Paginated<T> {
   limit: number;
 }
 
-export interface DashboardData {
-  summary: { totalTasks: number; todoCount: number; inProgressCount: number; blockedCount: number; completedCount: number };
-  semaphore: Record<Semaphore, number>;
-  byDepartment: {
-    id: string;
-    name: string;
-    color: string | null;
+// ─── Weekly dashboard (GET /dashboard/week/:weekId) ─────────────────────────
+// Metrics are fractions 0–1 (null = nothing to measure yet).
+
+export type AreaSemaphore = Exclude<Semaphore, 'GRAY'>;
+
+export interface WeekSummary {
+  id: string;
+  mondayDate: string;
+  saturdayDate: string;
+  weekNumber: number;
+  year: number;
+  status: 'ACTIVE' | 'ARCHIVED';
+}
+
+export interface AreaTaskCounts {
+  total: number;
+  due: number;
+  done: number;
+  overdue: number;
+  blocked: number;
+}
+
+export interface DashboardArea {
+  id: string;
+  name: string;
+  color: string | null;
+  head: { id: string; displayName: string } | null;
+  tasks: AreaTaskCounts;
+  kpis: { total: number; recorded: number };
+  functions: { total: number; marked: number };
+  taskProgress: number | null;
+  kpiCompliance: number | null;
+  functionCompliance: number | null;
+  index: number | null;
+  semaphore: AreaSemaphore | null;
+}
+
+export interface WeekDashboard {
+  week: WeekSummary & { archivedAt: string | null };
+  today: string;
+  cards: {
+    index: number | null;
+    semaphore: AreaSemaphore | null;
     totalTasks: number;
-    status: Record<TaskStatus, number>;
-    semaphore: Record<Semaphore, number>;
-    averageProgress: number | null;
-  }[];
-  recentActivity: {
-    id: string;
-    action: string;
-    createdAt: string;
-    actor: { id: string; displayName: string } | null;
-    task: { id: string; title: string; departmentId: string };
-    changes: Record<string, { old: unknown; new: unknown }> | null;
-  }[];
+    doneTasks: number;
+    overdueTasks: number;
+    blockedTasks: number;
+    taskProgress: number | null;
+    kpiCompliance: number | null;
+    functionCompliance: number | null;
+    areasBySemaphore: Record<AreaSemaphore | 'NONE', number>;
+  };
+  departments: DashboardArea[];
+  charts: {
+    taskStatus: Record<TaskStatus, number>;
+    taskSemaphore: Record<Semaphore, number>;
+    criticalKpis: { id: string; title: string; completion: number | null; semaphore: AreaSemaphore | null; department: { id: string; name: string } }[];
+  };
   generatedAt: string;
+}
+
+export interface TrendPoint {
+  week: WeekSummary;
+  index: number | null;
+  taskProgress: number | null;
+  kpiCompliance: number | null;
+  functionCompliance: number | null;
+  semaphore: AreaSemaphore | null;
 }
 
 export interface AuthPayload {

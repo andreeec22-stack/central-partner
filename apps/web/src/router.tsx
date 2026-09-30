@@ -69,6 +69,7 @@ export const router = createBrowserRouter([
         element: <AppShell />,
         children: [
           { path: '/', element: page(<DashboardPage />) },
+          { path: '/dashboard', element: <Navigate to="/" replace /> },
           { path: '/tasks', element: page(<TasksPage />) },
           { path: '/task/:taskId', element: <TaskLink /> },
           {

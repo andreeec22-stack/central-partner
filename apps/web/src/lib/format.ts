@@ -44,3 +44,14 @@ export function initials(name: string): string {
     .map((p) => p[0]!.toUpperCase())
     .join('');
 }
+
+// 0.725 → 72.5 (one decimal at most); null stays null.
+export function toPercent(fraction: number | null | undefined): number | null {
+  return fraction === null || fraction === undefined ? null : Math.round(fraction * 1000) / 10;
+}
+
+// 72.5 → "72,5 %"-style text in Spanish; null → "—".
+export function formatPercent(percent: number | null | undefined): string {
+  if (percent === null || percent === undefined) return '—';
+  return `${new Intl.NumberFormat('es', { maximumFractionDigits: 1 }).format(percent)}%`;
+}

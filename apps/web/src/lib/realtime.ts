@@ -11,6 +11,8 @@ export type ConnectionState = 'connecting' | 'live' | 'offline';
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || undefined; // same origin in dev
 
 const TASK_EVENTS = ['task:created', 'task:updated', 'task:progress', 'task:blocked', 'task:completed', 'task:deleted', 'tasks:imported'];
+// Weekly cycle: KPIs, functions and week open/close change the index.
+const WEEK_EVENTS = ['kpi:changed', 'function:changed', 'week:created', 'week:closed', 'task:observation'];
 // Detail-panel events: refresh that task's panel (and the list's comment/file counts).
 const DETAIL_EVENTS = ['comment:created', 'comment:updated', 'comment:deleted', 'file:uploaded', 'file:deleted'];
 
@@ -61,6 +63,7 @@ export function useRealtime(): ConnectionState {
         if (payload?.taskId) void qc.invalidateQueries({ queryKey: ['task', payload.taskId], exact: true });
       });
     }
+    for (const event of WEEK_EVENTS) socket.on(event, () => invalidate('dashboard', 'tasks'));
     for (const event of DETAIL_EVENTS) {
       socket.on(event, (payload: { taskId: string }) => {
         void qc.invalidateQueries({ queryKey: ['task', payload.taskId], exact: true });
