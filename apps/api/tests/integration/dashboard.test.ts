@@ -1,5 +1,5 @@
 import { prisma } from '../../src/lib/prisma';
-import { createTask, seedWorkspace, type Seed } from './fixtures';
+import { createTask, dueAt, seedWorkspace, type Seed } from './fixtures';
 import { call, resetDatabase } from './helpers';
 
 let s: Seed;
@@ -13,15 +13,16 @@ afterAll(() => prisma.$disconnect());
 
 describe('GET /dashboard', () => {
   it('summarizes status, semaphore and departments within the caller’s scope', async () => {
-    const a = await createTask(s.mkt.jefe.token, { title: 'A', assignedTo: s.mkt.user.id });
-    const b = await createTask(s.mkt.jefe.token, { title: 'B', assignedTo: s.mkt.user.id });
-    await createTask(s.fin.jefe.token, { title: 'F' });
+    const a = await createTask(s.mkt.jefe.token, { title: 'A', assignedTo: s.mkt.user.id, dueDate: dueAt(-1) });
+    const b = await createTask(s.mkt.jefe.token, { title: 'B', assignedTo: s.mkt.user.id, dueDate: dueAt(-1) });
+    await createTask(s.fin.jefe.token, { title: 'F', dueDate: dueAt(1) });
     await call('PATCH', `/api/v1/tasks/${a.id}`, { token: s.mkt.user.token, body: { progress: 100 } });
     await call('PATCH', `/api/v1/tasks/${b.id}`, { token: s.mkt.user.token, body: { status: 'BLOCKED', blockReason: 'Falta aprobación' } });
 
     const admin = (await call('GET', '/api/v1/dashboard', { token: s.admin.token })).body;
     expect(admin.summary).toEqual({ totalTasks: 3, todoCount: 1, inProgressCount: 0, blockedCount: 1, completedCount: 1 });
-    expect(admin.semaphore).toEqual({ GREEN: 1, YELLOW: 0, RED: 2 });
+    // By date: A is done, B's day passed, F is due tomorrow.
+    expect(admin.semaphore).toEqual({ GREEN: 1, YELLOW: 0, RED: 1, GRAY: 1 });
     expect(admin.byDepartment.map((d: { name: string; totalTasks: number }) => [d.name, d.totalTasks])).toEqual([
       ['Finanzas', 1],
       ['Marketing', 2],

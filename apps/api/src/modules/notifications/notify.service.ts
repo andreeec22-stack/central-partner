@@ -1,18 +1,22 @@
+import type { NotificationType } from '@prisma/client';
 import { logger } from '../../lib/logger';
 import { prisma } from '../../lib/prisma';
 import { emitTo, rooms } from '../../lib/realtime';
 import { sendWhatsApp, type WhatsAppType } from './whatsapp.service';
 
-// Fan-out for task events: an in-app notification (badge + dropdown), pushed
-// over the socket, plus a WhatsApp message when the recipient opted in.
-// Call it AFTER the triggering transaction commits.
+// Fan-out for task and week events: an in-app notification (badge +
+// dropdown), pushed over the socket, plus a WhatsApp message for the task
+// events the recipient opted in to. Call it AFTER the triggering transaction commits.
+
+const WHATSAPP_TYPES: readonly NotificationType[] = ['MENTIONED', 'TASK_ASSIGNED', 'COMMENT_REPLY'] satisfies WhatsAppType[];
 
 export interface NotifyInput {
   workspaceId: string;
   recipientIds: string[];
-  type: WhatsAppType;
-  actor: { id: string; displayName: string };
-  task: { id: string; title: string };
+  type: NotificationType;
+  // null = the system (e.g. the weekly scheduler).
+  actor: { id: string; displayName: string } | null;
+  task?: { id: string; title: string } | null;
   title: string;
   body?: string | null;
 }
@@ -25,7 +29,7 @@ export async function flushNotifications() {
 }
 
 export async function notify(input: NotifyInput) {
-  const recipients = [...new Set(input.recipientIds)].filter((id) => id !== input.actor.id);
+  const recipients = [...new Set(input.recipientIds)].filter((id) => id !== input.actor?.id);
   if (!recipients.length) return;
 
   const created = await prisma.notification.createManyAndReturn({
@@ -35,16 +39,17 @@ export async function notify(input: NotifyInput) {
       type: input.type,
       title: input.title.slice(0, 255),
       body: input.body?.slice(0, 1000) ?? null,
-      taskId: input.task.id,
-      actorId: input.actor.id,
+      taskId: input.task?.id ?? null,
+      actorId: input.actor?.id ?? null,
     })),
   });
 
   for (const n of created) {
     emitTo([rooms.user(n.userId)], 'notification:created', {
-      notification: { ...n, fromUser: { id: input.actor.id, displayName: input.actor.displayName }, taskTitle: input.task.title },
+      notification: { ...n, fromUser: input.actor, taskTitle: input.task?.title ?? null },
     });
-    const delivery = sendWhatsApp({ userId: n.userId, type: input.type, task: input.task })
+    if (!input.task || !WHATSAPP_TYPES.includes(input.type)) continue;
+    const delivery = sendWhatsApp({ userId: n.userId, type: input.type as WhatsAppType, task: input.task })
       .catch((error) => logger.error('whatsapp delivery crashed', { error, userId: n.userId }))
       .finally(() => inFlight.delete(delivery));
     inFlight.add(delivery);
@@ -53,5 +58,5 @@ export async function notify(input: NotifyInput) {
 
 // Never let a notification problem undo the action the user just completed.
 export function notifySafely(input: NotifyInput) {
-  return notify(input).catch((error) => logger.error('notify failed', { error, type: input.type, taskId: input.task.id }));
+  return notify(input).catch((error) => logger.error('notify failed', { error, type: input.type, taskId: input.task?.id }));
 }

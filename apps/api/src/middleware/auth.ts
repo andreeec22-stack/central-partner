@@ -25,7 +25,7 @@ export async function authenticateAccessToken(token: string): Promise<AuthUser> 
         displayName: true,
         timezone: true,
         deletedAt: true,
-        workspace: { select: { deletedAt: true } },
+        workspace: { select: { deletedAt: true, timezone: true } },
       },
     }),
     prisma.session.findUnique({
@@ -51,6 +51,7 @@ export async function authenticateAccessToken(token: string): Promise<AuthUser> 
     email: user.email,
     displayName: user.displayName,
     timezone: user.timezone,
+    workspaceTimezone: user.workspace.timezone,
   };
 }
 

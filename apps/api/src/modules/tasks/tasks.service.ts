@@ -13,9 +13,11 @@ import {
 } from '../../lib/permissions';
 import { prisma, type Tx } from '../../lib/prisma';
 import { emitTo, emitToExcept, taskRooms } from '../../lib/realtime';
-import { semaphoreFor } from '../../lib/semaphore';
 import { weekRange } from '../../lib/time';
+import { dateToDay, localDay } from '../../lib/week';
+import { taskDay, taskSemaphore } from '../../lib/weekly-metrics';
 import { notifySafely } from '../notifications/notify.service';
+import { assertWeekOpen, currentWeek, weekClosedError, weekForTask } from '../weeks/weeks.service';
 import { commentInclude, presentComment } from './comments.service';
 import { fileInclude, presentFile } from './files.service';
 import { mentionableUsers } from './mentions';
@@ -33,6 +35,9 @@ const taskInclude = {
   assignedTo: { select: { id: true, displayName: true } },
   createdBy: { select: { id: true, displayName: true } },
   department: { select: { id: true, name: true, color: true } },
+  week: { select: { id: true, mondayDate: true, weekNumber: true, year: true, status: true } },
+  carriedFrom: { select: { id: true, weekNumber: true, year: true } },
+  observations: { select: { weekId: true, observation: true, updatedAt: true }, orderBy: { updatedAt: 'desc' }, take: 3 },
   _count: {
     select: {
       subTasks: { where: { deletedAt: null } },
@@ -44,9 +49,35 @@ const taskInclude = {
 
 type TaskRow = Prisma.TaskGetPayload<{ include: typeof taskInclude }>;
 
-export function presentTask(t: TaskRow) {
-  const { _count, deletedAt: _deleted, collaborationParticipantIds: _participants, ...rest } = t;
-  return { ...rest, counts: _count };
+// Adds what depends on "today": the date-based semaphore and the task's day.
+export function presentTask(t: TaskRow, timeZone: string, now = new Date()) {
+  const { _count, deletedAt: _deleted, collaborationParticipantIds: _participants, observations, week, ...rest } = t;
+  const monday = week ? dateToDay(week.mondayDate) : null;
+  return {
+    ...rest,
+    day: taskDay(t, monday, timeZone),
+    semaphore: taskSemaphore(t, monday, localDay(now, timeZone), timeZone),
+    week: week ? { id: week.id, weekNumber: week.weekNumber, year: week.year, mondayDate: monday, status: week.status } : null,
+    // This week's note (observations are per week, so a new week starts clean).
+    observation: observations.find((o) => o.weekId === t.weekId)?.observation ?? null,
+    counts: _count,
+  };
+}
+
+// Compact task references (sub-tasks, dependencies) with their semaphore.
+const refSelect = {
+  id: true,
+  title: true,
+  status: true,
+  progress: true,
+  dueDate: true,
+  week: { select: { mondayDate: true } },
+} satisfies Prisma.TaskSelect;
+
+function presentRef(t: Prisma.TaskGetPayload<{ select: typeof refSelect }>, timeZone: string, today: string) {
+  const { week, dueDate: _due, ...rest } = t;
+  const monday = week ? dateToDay(week.mondayDate) : null;
+  return { ...rest, semaphore: taskSemaphore(t, monday, today, timeZone) };
 }
 
 // ─── Shared helpers ─────────────────────────────────────────────────────────
@@ -122,9 +153,11 @@ interface UpdatePlan {
 
 const STATE_FIELDS = ['status', 'progress', 'priority', 'blockReason', 'dueDate', 'kpiActual'] as const;
 
-async function planUpdate(ctx: OpContext, task: Task, patch: UpdateTaskInput): Promise<UpdatePlan> {
+// `targetWeekId`: the week of a new due date (resolved before the transaction).
+async function planUpdate(ctx: OpContext, task: Task, patch: UpdateTaskInput, targetWeekId?: string): Promise<UpdatePlan> {
   const { user } = ctx;
   const data: Prisma.TaskUncheckedUpdateInput = {};
+  if (targetWeekId && targetWeekId !== task.weekId) data.weekId = targetWeekId;
 
   if (patch.departmentId !== undefined && patch.departmentId !== task.departmentId) {
     if (user.role !== 'ADMIN') throw forbidden('Only an administrator can move a task to another department');
@@ -169,15 +202,16 @@ function actionFor(events: TaskStateEvents) {
   return ActivityAction.TASK_UPDATED;
 }
 
-function emitTaskUpdate(task: TaskRow, previous: Task, changes: FieldChanges, events: TaskStateEvents) {
+function emitTaskUpdate(task: TaskRow, previous: Task, changes: FieldChanges, events: TaskStateEvents, timeZone: string) {
   const audience = taskRooms(task);
   const formerAudience = taskRooms(previous).filter((r) => !audience.includes(r));
   if (formerAudience.length) {
     emitToExcept(formerAudience, audience, 'task:updated', { taskId: task.id, removed: true });
   }
-  emitTo(audience, 'task:updated', { taskId: task.id, changes, task: presentTask(task), updatedAt: task.updatedAt });
+  const presented = presentTask(task, timeZone);
+  emitTo(audience, 'task:updated', { taskId: task.id, changes, task: presented, updatedAt: task.updatedAt });
   if (events.progressChanged) {
-    emitTo(audience, 'task:progress', { taskId: task.id, progress: task.progress, semaphore: task.semaphore });
+    emitTo(audience, 'task:progress', { taskId: task.id, progress: task.progress, semaphore: presented.semaphore, weekId: task.weekId });
   }
   if (events.blocked) {
     emitTo(audience, 'task:blocked', {
@@ -226,6 +260,10 @@ export async function listTasks(user: AuthUser, q: ListTasksQuery) {
       ],
     });
   }
+  if (q.weekId) {
+    const weekId = q.weekId === 'current' ? (await currentWeek(user.workspaceId, user.workspaceTimezone)).id : q.weekId;
+    and.push({ weekId });
+  }
   if (q.week) {
     // A task belongs to the week of its due date; undated tasks to the week they were written.
     const { start, end } = weekRange(q.week, user.timezone);
@@ -266,7 +304,8 @@ export async function listTasks(user: AuthUser, q: ListTasksQuery) {
   ]);
 
   const { page, limit, ...filters } = q;
-  return { data: rows.map(presentTask), total, page, limit, filters };
+  const now = new Date();
+  return { data: rows.map((t) => presentTask(t, user.workspaceTimezone, now)), total, page, limit, filters };
 }
 
 const DETAIL_ACTIVITY_LIMIT = 100;
@@ -287,16 +326,16 @@ export async function getTaskDetail(user: AuthUser, id: string) {
     prisma.taskFile.findMany({ where: { taskId: id, deletedAt: null }, include: fileInclude, orderBy: { createdAt: 'desc' } }),
     prisma.task.findMany({
       where: { parentTaskId: id, deletedAt: null },
-      select: { id: true, title: true, status: true, progress: true, semaphore: true, assignedToId: true },
+      select: { ...refSelect, assignedToId: true },
       orderBy: { createdAt: 'asc' },
     }),
     prisma.taskDependency.findMany({
       where: { taskId: id, dependsOn: { deletedAt: null } },
-      select: { dependsOn: { select: { id: true, title: true, status: true, semaphore: true } } },
+      select: { dependsOn: { select: refSelect } },
     }),
     prisma.taskDependency.findMany({
       where: { dependsOnTaskId: id, task: { deletedAt: null } },
-      select: { task: { select: { id: true, title: true, status: true, semaphore: true } } },
+      select: { task: { select: refSelect } },
     }),
     prisma.activityLog.findMany({
       where: { workspaceId: user.workspaceId, entityType: 'Task', entityId: id },
@@ -307,16 +346,20 @@ export async function getTaskDetail(user: AuthUser, id: string) {
     mentionableUsers(prisma, visible.workspaceId, visible.departmentId),
   ]);
   const index = new Map(people.map((p) => [p.id, { id: p.id, displayName: p.displayName, handle: p.handle }]));
+  const tz = user.workspaceTimezone;
+  const today = localDay(new Date(), tz);
+  // An archived week is read-only for everyone.
+  const open = task.week?.status !== 'ARCHIVED';
 
   return {
-    task: presentTask(task),
+    task: presentTask(task, tz),
     blockReason: task.blockReason,
     blockedSince: task.blockedSince,
     comments: comments.map((c) => presentComment(c, index)),
     files: await Promise.all(files.map(presentFile)),
-    subTasks,
-    dependencies: dependencies.map((d) => d.dependsOn),
-    dependents: dependents.map((d) => d.task),
+    subTasks: subTasks.map(({ assignedToId, ...t }) => ({ ...presentRef(t, tz, today), assignedToId })),
+    dependencies: dependencies.map((d) => presentRef(d.dependsOn, tz, today)),
+    dependents: dependents.map((d) => presentRef(d.task, tz, today)),
     activity: activity.map((a) => ({
       id: a.id,
       taskId: id,
@@ -329,10 +372,11 @@ export async function getTaskDetail(user: AuthUser, id: string) {
       user: a.user ? { id: a.user.id, name: a.user.displayName } : null,
     })),
     permissions: {
-      canEdit: canEditTask(user, task),
-      canComment: canContribute(user, task),
-      canAddFiles: canContribute(user, task),
-      canDelete: canDeleteTask(user, task),
+      canEdit: open && canEditTask(user, task),
+      canComment: open && canContribute(user, task),
+      canAddFiles: open && canContribute(user, task),
+      canDelete: open && canDeleteTask(user, task),
+      weekOpen: open,
     },
   };
 }
@@ -348,6 +392,7 @@ export async function createTask(user: AuthUser, input: CreateTaskInput, ctx: Cl
   if (!canCreateTaskIn(user, departmentId)) throw forbidden('You can only create tasks in your own department');
   const assignedToId = input.assignedTo ?? null;
   const scope = await departmentScope(user);
+  const week = await weekForTask(user.workspaceId, user.workspaceTimezone, input.dueDate ?? null, user.id);
 
   const task = await prisma.$transaction(async (tx) => {
     const op: OpContext = { tx, user, scope, now: new Date(), memo: new Map() };
@@ -370,7 +415,7 @@ export async function createTask(user: AuthUser, input: CreateTaskInput, ctx: Cl
         kpiActual: input.kpiActual ?? null,
         kpiRecordedAt: input.kpiActual ? op.now : null,
         progress: 0,
-        semaphore: semaphoreFor(0),
+        weekId: week.id,
         sourceType: 'MANUAL',
         collaborationParticipantIds: [user.id],
       },
@@ -396,7 +441,7 @@ export async function createTask(user: AuthUser, input: CreateTaskInput, ctx: Cl
     return created;
   });
 
-  const payload = presentTask(task);
+  const payload = presentTask(task, user.workspaceTimezone);
   emitTo(taskRooms(task), 'task:created', {
     taskId: task.id,
     title: task.title,
@@ -412,12 +457,15 @@ export async function createTask(user: AuthUser, input: CreateTaskInput, ctx: Cl
 
 export async function updateTask(user: AuthUser, id: string, patch: UpdateTaskInput, ctx: ClientContext) {
   const scope = await departmentScope(user);
+  // A new date may move the task to another (open) week.
+  const targetWeek = patch.dueDate ? await weekForTask(user.workspaceId, user.workspaceTimezone, patch.dueDate, user.id) : null;
   const result = await prisma.$transaction(async (tx) => {
     const op: OpContext = { tx, user, scope, now: new Date(), memo: new Map() };
     const task = await findVisibleTask(tx, user, scope, id);
     if (!canEditTask(user, task)) throw forbidden('You can only edit tasks assigned to you or that you created');
+    await assertWeekOpen(tx, task.weekId);
 
-    const plan = await planUpdate(op, task, patch);
+    const plan = await planUpdate(op, task, patch, targetWeek?.id);
     if (Object.keys(plan.changes).length === 0) {
       return { task: await tx.task.findUniqueOrThrow({ where: { id }, include: taskInclude }), previous: task, plan };
     }
@@ -438,21 +486,24 @@ export async function updateTask(user: AuthUser, id: string, patch: UpdateTaskIn
   });
 
   if (Object.keys(result.plan.changes).length) {
-    emitTaskUpdate(result.task, result.previous, result.plan.changes, result.plan.events);
+    emitTaskUpdate(result.task, result.previous, result.plan.changes, result.plan.events, user.workspaceTimezone);
     await notifyAssignee(user, result.task, result.previous.assignedToId);
   }
-  return { task: presentTask(result.task) };
+  return { task: presentTask(result.task, user.workspaceTimezone) };
 }
 
 // Gap 13: all-or-nothing. Every task is validated first; if any fails, nothing
 // is written and the caller gets the per-task reasons.
 export async function bulkUpdateTasks(user: AuthUser, input: BulkUpdateInput, ctx: ClientContext) {
   const scope = await departmentScope(user);
+  const dueDate = input.updates.dueDate;
+  const targetWeek = dueDate ? await weekForTask(user.workspaceId, user.workspaceTimezone, dueDate, user.id) : null;
   const results = await prisma.$transaction(
     async (tx) => {
       const op: OpContext = { tx, user, scope, now: new Date(), memo: new Map() };
       const tasks = await tx.task.findMany({
         where: { id: { in: input.taskIds }, workspaceId: user.workspaceId, deletedAt: null, departmentId: departmentFilter(scope) },
+        include: { week: { select: { status: true } } },
       });
       const byId = new Map(tasks.map((t) => [t.id, t]));
       const failed: { taskId: string; code: string; reason: string }[] = [];
@@ -468,8 +519,12 @@ export async function bulkUpdateTasks(user: AuthUser, input: BulkUpdateInput, ct
           failed.push({ taskId, code: 'FORBIDDEN', reason: 'You cannot edit this task' });
           continue;
         }
+        if (task.week?.status === 'ARCHIVED') {
+          failed.push({ taskId, code: 'WEEK_ARCHIVED', reason: weekClosedError().message });
+          continue;
+        }
         try {
-          plans.push({ task, plan: await planUpdate(op, task, input.updates) });
+          plans.push({ task, plan: await planUpdate(op, task, input.updates, targetWeek?.id) });
         } catch (err) {
           if (!(err instanceof AppError)) throw err;
           failed.push({ taskId, code: err.code, reason: err.message });
@@ -506,7 +561,7 @@ export async function bulkUpdateTasks(user: AuthUser, input: BulkUpdateInput, ct
     { timeout: 20_000 },
   );
 
-  for (const r of results) emitTaskUpdate(r.task, r.previous, r.plan.changes, r.plan.events);
+  for (const r of results) emitTaskUpdate(r.task, r.previous, r.plan.changes, r.plan.events, user.workspaceTimezone);
   await Promise.all(results.map((r) => notifyAssignee(user, r.task, r.previous.assignedToId)));
   return { successful: input.taskIds, failed: [] as never[], updatedCount: results.length };
 }
@@ -518,6 +573,7 @@ export async function deleteTask(user: AuthUser, id: string, ctx: ClientContext)
   const task = await prisma.$transaction(async (tx) => {
     const task = await findVisibleTask(tx, user, scope, id);
     if (!canDeleteTask(user, task)) throw forbidden('Only the creator, the area head or an administrator can delete this task');
+    await assertWeekOpen(tx, task.weekId);
     const now = new Date();
     await tx.task.update({ where: { id }, data: { deletedAt: now } });
     const files = await tx.taskFile.updateMany({ where: { taskId: id, deletedAt: null }, data: { deletedAt: now } });
@@ -549,6 +605,7 @@ export async function addDependency(user: AuthUser, taskId: string, dependsOnTas
 
     const task = await findVisibleTask(tx, user, scope, taskId);
     if (!canEditTask(user, task)) throw forbidden();
+    await assertWeekOpen(tx, task.weekId);
     const prerequisite = await findVisibleTask(tx, user, scope, dependsOnTaskId).catch(() => {
       throw validationError('Prerequisite task not found', [{ field: 'dependsOnTaskId', message: 'invalid' }]);
     });
@@ -593,6 +650,7 @@ export async function removeDependency(user: AuthUser, taskId: string, dependsOn
   const task = await prisma.$transaction(async (tx) => {
     const task = await findVisibleTask(tx, user, scope, taskId);
     if (!canEditTask(user, task)) throw forbidden();
+    await assertWeekOpen(tx, task.weekId);
     const removed = await tx.taskDependency.deleteMany({ where: { taskId, dependsOnTaskId } });
     if (removed.count === 0) throw notFound('Dependency');
     await logActivity(
@@ -610,4 +668,74 @@ export async function removeDependency(user: AuthUser, taskId: string, dependsOn
     return task;
   });
   emitTo(taskRooms(task), 'task:updated', { taskId, changes: { dependencies: { removed: dependsOnTaskId } } });
+}
+
+// ─── Weekly cycle: observation & history ────────────────────────────────────
+
+// The "Obs." of the task for its current week. Same people who update its %.
+export async function setTaskObservation(user: AuthUser, id: string, observation: string | null, ctx: ClientContext) {
+  const scope = await departmentScope(user);
+  const task = await findVisibleTask(prisma, user, scope, id);
+  if (!canEditTask(user, task)) throw forbidden('You can only add notes to tasks assigned to you or that you manage');
+  if (!task.weekId) throw validationError('This task is not in any week', [{ field: 'weekId', message: 'missing' }]);
+  await assertWeekOpen(prisma, task.weekId);
+  const weekId = task.weekId;
+
+  const previous = await prisma.taskObservation.findUnique({ where: { taskId_weekId: { taskId: id, weekId } } });
+  if ((previous?.observation ?? null) === observation) return { observation };
+  await prisma.$transaction(async (tx) => {
+    if (observation === null) await tx.taskObservation.deleteMany({ where: { taskId: id, weekId } });
+    else {
+      await tx.taskObservation.upsert({
+        where: { taskId_weekId: { taskId: id, weekId } },
+        update: { observation, createdById: user.id },
+        create: { workspaceId: user.workspaceId, taskId: id, weekId, observation, createdById: user.id },
+      });
+    }
+    await logActivity(
+      {
+        workspaceId: user.workspaceId,
+        userId: user.id,
+        action: ActivityAction.TASK_OBSERVATION_SET,
+        entityType: 'Task',
+        entityId: id,
+        changes: { observation: { old: previous?.observation ?? null, new: observation } },
+        metadata: { weekId },
+        ipAddress: ctx.ipAddress,
+      },
+      tx,
+    );
+  });
+  emitTo(taskRooms(task), 'task:observation', { taskId: id, weekId, observation });
+  return { observation };
+}
+
+// Paged audit trail of one task (the detail panel shows only the latest 100).
+export async function taskHistory(user: AuthUser, id: string, q: { page: number; limit: number }) {
+  const scope = await departmentScope(user);
+  await findVisibleTask(prisma, user, scope, id);
+  const where = { workspaceId: user.workspaceId, entityType: 'Task', entityId: id };
+  const [rows, total] = await Promise.all([
+    prisma.activityLog.findMany({
+      where,
+      include: { user: { select: { id: true, displayName: true } } },
+      orderBy: { createdAt: 'desc' },
+      skip: (q.page - 1) * q.limit,
+      take: q.limit,
+    }),
+    prisma.activityLog.count({ where }),
+  ]);
+  return {
+    data: rows.map((a) => ({
+      id: a.id,
+      action: a.action,
+      changes: a.changes,
+      metadata: a.metadata,
+      timestamp: a.createdAt,
+      user: a.user ? { id: a.user.id, name: a.user.displayName } : null,
+    })),
+    total,
+    page: q.page,
+    limit: q.limit,
+  };
 }

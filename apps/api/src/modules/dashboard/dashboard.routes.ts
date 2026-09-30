@@ -2,16 +2,20 @@ import type { Prisma, Semaphore, TaskStatus } from '@prisma/client';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { forbidden } from '../../lib/errors';
+import { contentDisposition } from '../../lib/storage';
+import { dateToDay, localDay } from '../../lib/week';
+import { taskSemaphore } from '../../lib/weekly-metrics';
 import { canSeeDepartment, departmentFilter, departmentScope } from '../../lib/permissions';
 import { prisma } from '../../lib/prisma';
-import { parseQuery } from '../../lib/validation';
+import { idParam, parseQuery } from '../../lib/validation';
 import { requireAuth } from '../../middleware/auth';
 import type { AppEnv, AuthUser } from '../../types';
+import { departmentWeek, exportWeekExcel, trends, weekDashboard } from './weekly-dashboard.service';
 
 const querySchema = z.object({ departmentId: z.string().uuid().optional() });
 
 const STATUSES: TaskStatus[] = ['TODO', 'IN_PROGRESS', 'BLOCKED', 'DONE'];
-const SEMAPHORES: Semaphore[] = ['GREEN', 'YELLOW', 'RED'];
+const SEMAPHORES: Semaphore[] = ['GREEN', 'YELLOW', 'RED', 'GRAY'];
 const zeroStatus = () => Object.fromEntries(STATUSES.map((s) => [s, 0])) as Record<TaskStatus, number>;
 const zeroSemaphore = () => Object.fromEntries(SEMAPHORES.map((s) => [s, 0])) as Record<Semaphore, number>;
 
@@ -26,11 +30,11 @@ async function buildDashboard(user: AuthUser, departmentId?: string) {
     departmentId: departmentId ?? departmentFilter(scope),
   };
 
-  const [byStatus, bySemaphore, byDeptStatus, byDeptSemaphore, byDeptProgress, departments, recentLogs] = await Promise.all([
+  const [byStatus, semaphoreRows, byDeptStatus, byDeptProgress, departments, recentLogs] = await Promise.all([
     prisma.task.groupBy({ by: ['status'], where, _count: { _all: true } }),
-    prisma.task.groupBy({ by: ['semaphore'], where, _count: { _all: true } }),
+    // The semaphore depends on today's date, so it is counted here, not stored.
+    prisma.task.findMany({ where, select: { departmentId: true, progress: true, dueDate: true, week: { select: { mondayDate: true } } } }),
     prisma.task.groupBy({ by: ['departmentId', 'status'], where, _count: { _all: true } }),
-    prisma.task.groupBy({ by: ['departmentId', 'semaphore'], where, _count: { _all: true } }),
     prisma.task.groupBy({ by: ['departmentId'], where, _avg: { progress: true } }),
     prisma.department.findMany({
       where: { workspaceId: user.workspaceId, deletedAt: null, id: departmentId ?? departmentFilter(scope) },
@@ -47,14 +51,20 @@ async function buildDashboard(user: AuthUser, departmentId?: string) {
 
   const status = zeroStatus();
   for (const row of byStatus) status[row.status] = row._count._all;
+  const tz = user.workspaceTimezone;
+  const today = localDay(new Date(), tz);
+  const taskSemaphores = semaphoreRows.map((t) => ({
+    departmentId: t.departmentId,
+    semaphore: taskSemaphore(t, t.week ? dateToDay(t.week.mondayDate) : null, today, tz),
+  }));
   const semaphore = zeroSemaphore();
-  for (const row of bySemaphore) semaphore[row.semaphore] = row._count._all;
+  for (const t of taskSemaphores) semaphore[t.semaphore]++;
 
   const byDepartment = departments.map((d) => {
     const s = zeroStatus();
     const sem = zeroSemaphore();
     for (const r of byDeptStatus) if (r.departmentId === d.id) s[r.status] = r._count._all;
-    for (const r of byDeptSemaphore) if (r.departmentId === d.id) sem[r.semaphore] = r._count._all;
+    for (const t of taskSemaphores) if (t.departmentId === d.id) sem[t.semaphore]++;
     const avg = byDeptProgress.find((r) => r.departmentId === d.id)?._avg.progress ?? null;
     return {
       ...d,
@@ -99,9 +109,32 @@ async function buildDashboard(user: AuthUser, departmentId?: string) {
   };
 }
 
+const weekRef = (c: Parameters<typeof idParam>[0]) => (c.req.param('weekId') === 'current' ? 'current' : idParam(c, 'weekId', 'Week'));
+
 export const dashboardRoutes = new Hono<AppEnv>()
   .use('*', requireAuth)
   .get('/', async (c) => {
     const { departmentId } = parseQuery(c, querySchema);
     return c.json(await buildDashboard(c.get('user'), departmentId));
+  })
+  // Weekly cycle. :weekId accepts "current".
+  .get('/week/:weekId', async (c) => {
+    const { departmentId } = parseQuery(c, querySchema);
+    return c.json(await weekDashboard(c.get('user'), weekRef(c), departmentId));
+  })
+  .get('/department/:departmentId/week/:weekId', async (c) =>
+    c.json(await departmentWeek(c.get('user'), idParam(c, 'departmentId', 'Department'), weekRef(c))),
+  )
+  .get('/trends', async (c) => {
+    const q = parseQuery(c, querySchema.extend({ weeks: z.coerce.number().int().min(1).max(26).default(4) }));
+    return c.json(await trends(c.get('user'), q.weeks, q.departmentId));
+  })
+  .get('/export/excel', async (c) => {
+    const { weekId } = parseQuery(c, z.object({ weekId: z.union([z.literal('current'), z.string().uuid()]).default('current') }));
+    const { buffer, filename } = await exportWeekExcel(c.get('user'), weekId);
+    return c.body(buffer, 200, {
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': contentDisposition('attachment', filename),
+      'Cache-Control': 'no-store',
+    });
   });

@@ -4,7 +4,8 @@
 export type Role = 'ADMIN' | 'JEFE_AREA' | 'USER' | 'VIEWER';
 export type TaskStatus = 'TODO' | 'IN_PROGRESS' | 'BLOCKED' | 'DONE';
 export type Priority = 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
-export type Semaphore = 'GREEN' | 'YELLOW' | 'RED';
+// Tasks: by date (GREEN done · RED day passed · YELLOW due today · GRAY not yet).
+export type Semaphore = 'GREEN' | 'YELLOW' | 'RED' | 'GRAY';
 
 export interface User {
   id: string;

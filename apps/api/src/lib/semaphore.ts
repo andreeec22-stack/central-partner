@@ -8,9 +8,10 @@ export function isProgressStep(value: number): value is ProgressStep {
   return (PROGRESS_STEPS as readonly number[]).includes(value);
 }
 
-// GREEN >= 90, YELLOW 70–89, RED < 70. Colors are fixed, never branded.
-export function semaphoreFor(progress: number): Semaphore {
-  if (progress >= 90) return 'GREEN';
-  if (progress >= 70) return 'YELLOW';
+// Area index and KPI semaphore, from a percentage: GREEN >= 90, YELLOW 70–89,
+// RED < 70. (Tasks use the date-based rule in weekly-metrics.) Never branded.
+export function semaphoreFor(percent: number): Semaphore {
+  if (percent >= 90) return 'GREEN';
+  if (percent >= 70) return 'YELLOW';
   return 'RED';
 }

@@ -9,8 +9,8 @@ import { useDashboard } from '../lib/queries';
 import type { Semaphore } from '../lib/types';
 import { useAuth } from '../stores/auth';
 
-const SEM_ORDER: Semaphore[] = ['GREEN', 'YELLOW', 'RED'];
-const semBar: Record<Semaphore, string> = { GREEN: 'bg-sem-green', YELLOW: 'bg-sem-yellow', RED: 'bg-sem-red' };
+const SEM_ORDER: Semaphore[] = ['GREEN', 'YELLOW', 'RED', 'GRAY'];
+const semBar: Record<Semaphore, string> = { GREEN: 'bg-sem-green', YELLOW: 'bg-sem-yellow', RED: 'bg-sem-red', GRAY: 'bg-line-strong' };
 
 function StatCard({ label, value, icon, tone, to }: { label: string; value: number; icon: ReactNode; tone: string; to: string }) {
   return (

@@ -34,15 +34,47 @@ enum Priority {
   URGENT
 }
 
+// Area/KPI semaphore: GREEN >= 90%, YELLOW 70-89%, RED < 70%.
+// Task semaphore is date-based and computed on read (never stored):
+// GREEN = 100%, RED = its day passed, YELLOW = due today, GRAY = not due yet.
 enum Semaphore {
   GREEN
   YELLOW
   RED
+  GRAY
 }
 
 enum TaskSourceType {
   MANUAL
   EXCEL_IMPORT
+  // Created by the system (the monthly "Exponer resultados del mes" task).
+  SYSTEM
+}
+
+enum WeekStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum KpiType {
+  RESULT
+  COMPLIANCE
+  PROGRESS
+}
+
+enum FunctionFrequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+  WHEN_OCCURS
+  WHEN_CHANGES
+}
+
+enum FunctionFulfillment {
+  YES
+  PARTIAL
+  NO
+  NOT_APPLICABLE
 }
 
 enum ExcelImportStatus {
@@ -80,6 +112,8 @@ enum NotificationType {
   TASK_BLOCKED
   TASK_COMPLETED
   KPI_REMINDER
+  // "Tu semana está lista" to area heads when a week starts.
+  WEEK_STARTED
 }
 
 // ─── Workspace & branding ───────────────────────────────────────────────────
@@ -88,6 +122,8 @@ model Workspace {
   id                  String    @id @default(uuid()) @db.Uuid
   name                String    @db.VarChar(50)
   slug                String    @unique @db.VarChar(80)
+  // IANA zone that defines the workspace's weeks (Monday-Saturday) and "today".
+  timezone            String    @default("America/Lima") @db.VarChar(50)
   // Confirmación E: soft delete + 30-day grace period before hard delete.
   deleteRequestedAt   DateTime?
   deleteRequestedById String?   @db.Uuid
@@ -114,6 +150,10 @@ model Workspace {
   performanceSnapshots UserPerformanceSnapshot[]
   taskMetrics          TaskPerformanceMetric[]
   webhooks             Webhook[]
+  weeks                Week[]
+  kpis                 Kpi[]
+  functions            DepartmentFunction[]
+  taskObservations     TaskObservation[]
 
   @@map("workspaces")
 }
@@ -160,6 +200,8 @@ model Department {
   invitations Invitation[]
   snapshots   UserPerformanceSnapshot[]
   taskMetrics TaskPerformanceMetric[]
+  kpis        Kpi[]
+  functions   DepartmentFunction[]
 
   @@unique([workspaceId, slug])
   @@index([workspaceId, deletedAt])
@@ -203,6 +245,7 @@ model User {
   whatsAppLogs         WhatsAppNotificationLog[]
   activityLogs         ActivityLog[]
   excelImports         ExcelImport[]
+  taskObservations     TaskObservation[]
   performanceSnapshots UserPerformanceSnapshot[]
   assignedTaskMetrics  TaskPerformanceMetric[]      @relation("MetricAssignee")
   createdTaskMetrics   TaskPerformanceMetric[]      @relation("MetricCreator")
@@ -341,9 +384,12 @@ model Task {
   status       TaskStatus @default(TODO)
   priority     Priority   @default(MEDIUM)
   progress     Int        @default(0)
-  // Derived from progress on every write: >=90 GREEN, >=70 YELLOW, else RED.
-  semaphore    Semaphore  @default(RED)
+  // The task's day. Its week is the one containing it (undated tasks count as
+  // due on their week's Saturday). The semaphore is derived from it on read.
   dueDate      DateTime?
+  weekId       String?    @db.Uuid
+  // First week of a task carried over unfinished ("Viene de Sem. NN").
+  carriedFromWeekId String? @db.Uuid
 
   blockReason     String?   @db.VarChar(255)
   blockedSince    DateTime?
@@ -380,6 +426,9 @@ model Task {
   parentTask  Task?        @relation("SubTasks", fields: [parentTaskId], references: [id], onDelete: SetNull)
   subTasks    Task[]       @relation("SubTasks")
   excelImport ExcelImport? @relation(fields: [excelImportId], references: [id], onDelete: SetNull)
+  week        Week?        @relation("WeekTasks", fields: [weekId], references: [id], onDelete: SetNull)
+  carriedFrom Week?        @relation("CarriedTasks", fields: [carriedFromWeekId], references: [id], onDelete: SetNull)
+  observations TaskObservation[]
 
   dependencies  TaskDependency[]       @relation("DependentTask")
   dependents    TaskDependency[]       @relation("PrerequisiteTask")
@@ -393,6 +442,7 @@ model Task {
   @@index([workspaceId, dueDate])
   @@index([workspaceId, createdAt])
   @@index([parentTaskId])
+  @@index([weekId, departmentId])
   @@map("tasks")
 }
 
@@ -532,6 +582,7 @@ model ActivityLog {
 model WeeklyArchive {
   id          String   @id @default(uuid()) @db.Uuid
   workspaceId String   @db.Uuid
+  weekId      String?  @unique @db.Uuid
   weekStart   DateTime @db.Date
   weekEnd     DateTime @db.Date
   // Snapshot of every task's progress/semaphore/KPI for the week, grouped by department.
@@ -539,9 +590,117 @@ model WeeklyArchive {
   createdAt   DateTime @default(now())
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  week      Week?     @relation(fields: [weekId], references: [id], onDelete: SetNull)
 
   @@unique([workspaceId, weekStart])
   @@map("weekly_archives")
+}
+
+// ─── Weekly cycle ───────────────────────────────────────────────────────────
+// Monday-Saturday in the workspace timezone. Created automatically each
+// Monday, closed (archived) by an ADMIN; an archived week is read-only.
+
+model Week {
+  id           String     @id @default(uuid()) @db.Uuid
+  workspaceId  String     @db.Uuid
+  mondayDate   DateTime   @db.Date
+  weekNumber   Int
+  year         Int
+  status       WeekStatus @default(ACTIVE)
+  archivedAt   DateTime?
+  archivedById String?    @db.Uuid
+  // null = created by the scheduler.
+  createdById  String?    @db.Uuid
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  workspace    Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  tasks        Task[]               @relation("WeekTasks")
+  carriedTasks Task[]               @relation("CarriedTasks")
+  kpis         Kpi[]
+  functions    DepartmentFunction[]
+  observations TaskObservation[]
+  archive      WeeklyArchive?
+
+  @@unique([workspaceId, mondayDate])
+  @@index([workspaceId, status])
+  @@map("weeks")
+}
+
+// ② A department's KPI for one week. The real value is recorded on Saturday.
+model Kpi {
+  id             String   @id @default(uuid()) @db.Uuid
+  workspaceId    String   @db.Uuid
+  weekId         String   @db.Uuid
+  departmentId   String   @db.Uuid
+  title          String   @db.VarChar(120)
+  description    String?  @db.VarChar(500)
+  type           KpiType  @default(RESULT)
+  unit           String?  @db.VarChar(20)
+  target         Decimal  @db.Decimal(14, 4)
+  actual         Decimal? @db.Decimal(14, 4)
+  // Tardanzas, food cost, multas: meeting the target means staying at or under it.
+  lesserIsBetter Boolean  @default(false)
+  order          Int      @default(0)
+  recordedAt     DateTime?
+  recordedById   String?  @db.Uuid
+  createdById    String?  @db.Uuid
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  workspace  Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  week       Week       @relation(fields: [weekId], references: [id], onDelete: Cascade)
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+
+  @@index([weekId, departmentId])
+  @@map("kpis")
+}
+
+// ③ A recurring duty of the area, marked Sí / Parcial / No on Saturday.
+model DepartmentFunction {
+  id           String               @id @default(uuid()) @db.Uuid
+  workspaceId  String               @db.Uuid
+  weekId       String               @db.Uuid
+  departmentId String               @db.Uuid
+  title        String               @db.VarChar(160)
+  description  String?              @db.VarChar(500)
+  frequency    FunctionFrequency    @default(WEEKLY)
+  // null = not marked yet.
+  fulfilled    FunctionFulfillment?
+  observation  String?              @db.VarChar(500)
+  order        Int                  @default(0)
+  markedAt     DateTime?
+  markedById   String?              @db.Uuid
+  createdById  String?              @db.Uuid
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+
+  workspace  Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  week       Week       @relation(fields: [weekId], references: [id], onDelete: Cascade)
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+
+  @@index([weekId, departmentId])
+  @@map("department_functions")
+}
+
+// The responsible person's note on a task for one week (the "Obs." column).
+model TaskObservation {
+  id          String   @id @default(uuid()) @db.Uuid
+  workspaceId String   @db.Uuid
+  taskId      String   @db.Uuid
+  weekId      String   @db.Uuid
+  observation String   @db.VarChar(1000)
+  createdById String   @db.Uuid
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  task      Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  week      Week      @relation(fields: [weekId], references: [id], onDelete: Cascade)
+  createdBy User      @relation(fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@unique([taskId, weekId])
+  @@map("task_observations")
 }
 
 model ExcelImport {

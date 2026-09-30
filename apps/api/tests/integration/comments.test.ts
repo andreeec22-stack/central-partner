@@ -204,9 +204,9 @@ describe('task detail', () => {
     expect(asUser.body.comments).toHaveLength(1);
     expect(asUser.body.files).toEqual([]);
     expect(asUser.body.activity[0]).toMatchObject({ action: 'COMMENT_ADDED', taskId: task.id, user: { id: s.mkt.user.id } });
-    expect(asUser.body.permissions).toEqual({ canEdit: true, canComment: true, canAddFiles: true, canDelete: false });
+    expect(asUser.body.permissions).toEqual({ canEdit: true, canComment: true, canAddFiles: true, canDelete: false, weekOpen: true });
 
     const asViewer = await call('GET', `/api/v1/tasks/${task.id}`, { token: s.mkt.viewer.token });
-    expect(asViewer.body.permissions).toEqual({ canEdit: false, canComment: false, canAddFiles: false, canDelete: false });
+    expect(asViewer.body.permissions).toEqual({ canEdit: false, canComment: false, canAddFiles: false, canDelete: false, weekOpen: true });
   });
 });

@@ -32,6 +32,11 @@ export type ServerEvent =
   | 'notification:created'
   | 'branding:updated'
   | 'excel:processing_complete'
+  | 'week:created'
+  | 'week:closed'
+  | 'kpi:changed'
+  | 'function:changed'
+  | 'task:observation'
   | 'permissions:updated';
 
 let io: Server | null = null;

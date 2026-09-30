@@ -1,5 +1,5 @@
 import { prisma } from '../../src/lib/prisma';
-import { createTask, seedWorkspace, type Seed } from './fixtures';
+import { createTask, dueAt, seedWorkspace, type Seed } from './fixtures';
 import { call, resetDatabase } from './helpers';
 
 let s: Seed;
@@ -59,7 +59,6 @@ describe('creating tasks', () => {
       createdById: s.mkt.jefe.id,
       status: 'TODO',
       progress: 0,
-      semaphore: 'RED',
       priority: 'MEDIUM',
       sourceType: 'MANUAL',
     });
@@ -130,11 +129,11 @@ describe('visibility (RBAC)', () => {
 
 describe('daily progress and semaphore', () => {
   it('follows 0/25/50/75/100 and derives status and semaphore', async () => {
-    const task = await createTask(s.mkt.jefe.token, { assignedTo: s.mkt.user.id, title: 'Reporte' });
+    const task = await createTask(s.mkt.jefe.token, { assignedTo: s.mkt.user.id, title: 'Reporte', dueDate: dueAt(1) });
     expect((await patch(s.mkt.user.token, task.id, { progress: 30 })).status).toBe(422);
 
     const p75 = await patch(s.mkt.user.token, task.id, { progress: 75 });
-    expect(p75.body.task).toMatchObject({ progress: 75, semaphore: 'YELLOW', status: 'IN_PROGRESS' });
+    expect(p75.body.task).toMatchObject({ progress: 75, semaphore: 'GRAY', status: 'IN_PROGRESS' }); // due tomorrow
 
     const p100 = await patch(s.mkt.user.token, task.id, { progress: 100 });
     expect(p100.body.task).toMatchObject({ progress: 100, semaphore: 'GREEN', status: 'DONE' });
@@ -142,7 +141,7 @@ describe('daily progress and semaphore', () => {
 
     const logs = await prisma.activityLog.findMany({ where: { entityId: task.id }, orderBy: { createdAt: 'asc' } });
     expect(logs.map((l) => l.action)).toEqual(['TASK_CREATED', 'TASK_UPDATED', 'TASK_COMPLETED']);
-    expect(logs[1]!.changes).toMatchObject({ progress: { old: 0, new: 75 }, semaphore: { old: 'RED', new: 'YELLOW' } });
+    expect(logs[1]!.changes).toMatchObject({ progress: { old: 0, new: 75 }, status: { old: 'TODO', new: 'IN_PROGRESS' } });
   });
 
   it('records the KPI actual with a timestamp', async () => {

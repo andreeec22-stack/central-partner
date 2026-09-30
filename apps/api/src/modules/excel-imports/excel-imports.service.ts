@@ -6,13 +6,14 @@ import { logger } from '../../lib/logger';
 import { toSkipTake } from '../../lib/pagination';
 import { prisma } from '../../lib/prisma';
 import { emitTo, rooms } from '../../lib/realtime';
-import { semaphoreFor } from '../../lib/semaphore';
+import { mondayOf } from '../../lib/week';
 import { getStorage } from '../../lib/storage';
 import type { Upload } from '../../lib/upload';
 import type { AuthUser } from '../../types';
 import { ActivityAction, logActivity } from '../audit/activity-log';
 import type { ClientContext } from '../auth/auth.service';
 import { notifySafely } from '../notifications/notify.service';
+import { ensureWeek } from '../weeks/weeks.service';
 import { detectTasks, type DetectedTask, type DetectionResult } from './detection';
 import type { ConfirmImportInput } from './excel-imports.schemas';
 import { readSheet } from './xlsx';
@@ -173,6 +174,14 @@ export async function confirmImport(user: AuthUser, id: string, input: ConfirmIm
     return !!u && (u.role === 'ADMIN' || u.departmentId === departmentId);
   };
 
+  // Every task lands in the week of its date (undated: this week).
+  const now = new Date();
+  const mondayFor = (m: ConfirmImportInput['taskMappings'][number]) => mondayOf(m.dueDate ?? now, user.workspaceTimezone);
+  const weeks = new Map<string, Awaited<ReturnType<typeof ensureWeek>>['week']>();
+  for (const monday of new Set(input.taskMappings.map(mondayFor))) {
+    weeks.set(monday, (await ensureWeek(user.workspaceId, monday, user.id)).week);
+  }
+
   const outcome = await prisma.$transaction(
     async (tx) => {
       // One confirmation per import, even if the button is double-clicked.
@@ -190,7 +199,6 @@ export async function confirmImport(user: AuthUser, id: string, input: ConfirmIm
 
       const skipped: { rowIndex: number; reason: string }[] = [];
       const toCreate: Prisma.TaskCreateManyInput[] = [];
-      const now = new Date();
       for (const m of input.taskMappings) {
         if (!knownRows.has(m.rowIndex)) {
           skipped.push({ rowIndex: m.rowIndex, reason: 'Row not found in this import' });
@@ -213,6 +221,11 @@ export async function confirmImport(user: AuthUser, id: string, input: ConfirmIm
         }
         // No assignee given: the department head takes it.
         if (m.assignedToId === undefined && dept.headId && validAssignee(dept.headId, dept.id)) assignedToId = dept.headId;
+        const week = weeks.get(mondayFor(m))!;
+        if (week.status === 'ARCHIVED') {
+          skipped.push({ rowIndex: m.rowIndex, reason: `Week ${week.weekNumber} is already closed` });
+          continue;
+        }
 
         const status = m.status ?? 'TODO';
         const done = status === 'DONE';
@@ -227,7 +240,7 @@ export async function confirmImport(user: AuthUser, id: string, input: ConfirmIm
           priority: m.priority ?? 'MEDIUM',
           status,
           progress: done ? 100 : 0,
-          semaphore: semaphoreFor(done ? 100 : 0),
+          weekId: week.id,
           dueDate: m.dueDate ?? null,
           kpiTarget: m.kpiTarget ?? null,
           sourceType: 'EXCEL_IMPORT',

@@ -113,8 +113,10 @@ export type TaskPatch = Partial<{
   dueDate: string | null;
 }>;
 
-function semaphoreFor(progress: number): Task['semaphore'] {
-  return progress >= 90 ? 'GREEN' : progress >= 70 ? 'YELLOW' : 'RED';
+// The semaphore depends on the task's day; optimistically only 100% is certain
+// (green). Anything else keeps its color until the server answers.
+function optimisticSemaphore(task: Task, progress: number): Task['semaphore'] {
+  return progress >= 100 ? 'GREEN' : task.semaphore === 'GREEN' ? 'GRAY' : task.semaphore;
 }
 
 // Optimistic: the row changes instantly; the server's answer (which may derive
@@ -135,7 +137,7 @@ export function useUpdateTask() {
             t.id === id
               ? {
                   ...t,
-                  ...(patch.progress !== undefined ? { progress: patch.progress, semaphore: semaphoreFor(patch.progress) } : {}),
+                  ...(patch.progress !== undefined ? { progress: patch.progress, semaphore: optimisticSemaphore(t, patch.progress) } : {}),
                   ...(patch.status ? { status: patch.status } : {}),
                   ...(patch.priority ? { priority: patch.priority } : {}),
                   ...(patch.blockReason !== undefined ? { blockReason: patch.blockReason } : {}),

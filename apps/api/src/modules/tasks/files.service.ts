@@ -12,6 +12,7 @@ import type { AuthUser } from '../../types';
 import { ActivityAction, logActivity } from '../audit/activity-log';
 import type { ClientContext } from '../auth/auth.service';
 import { findVisibleTask } from './task-access';
+import { assertWeekOpen } from '../weeks/weeks.service';
 
 export const MAX_FILE_BYTES = 50 * 1024 * 1024;
 export const MAX_FILES_PER_TASK = 10;
@@ -64,6 +65,7 @@ export async function listFiles(user: AuthUser, taskId: string) {
 export async function uploadFile(user: AuthUser, taskId: string, upload: Upload, ctx: ClientContext) {
   const task = await loadTask(user, taskId);
   if (!canContribute(user, task)) throw forbidden('You cannot add files to this task');
+  await assertWeekOpen(prisma, task.weekId);
 
   // Cheap early check; the authoritative one runs under the lock below.
   const existing = await prisma.taskFile.count({ where: { taskId: task.id, deletedAt: null } });
@@ -125,6 +127,7 @@ export async function deleteFile(user: AuthUser, taskId: string, fileId: string,
   if (file.uploadedById !== user.id && user.role !== 'ADMIN') {
     throw forbidden('Only the uploader or an administrator can delete this file');
   }
+  await assertWeekOpen(prisma, task.weekId);
   await prisma.$transaction(async (tx) => {
     await tx.taskFile.update({ where: { id: file.id }, data: { deletedAt: new Date() } });
     await logActivity(

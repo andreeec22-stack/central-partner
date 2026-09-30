@@ -22,6 +22,8 @@ export const listTasksSchema = z.object({
   assignedTo: z.union([z.literal('me'), z.literal('unassigned'), z.string().uuid()]).optional(),
   search: z.string().trim().min(1).max(100).optional(),
   week: z.enum(['last', 'this', 'next']).optional(),
+  // A week of the cycle ("current" or its id).
+  weekId: z.union([z.literal('current'), z.string().uuid()]).optional(),
   includeBlocked: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
   parentTaskId: z.string().uuid().optional(),
   sourceType: z.enum(['MANUAL', 'EXCEL_IMPORT']).optional(),
@@ -92,3 +94,14 @@ export const commentSchema = z.object({
 });
 
 export const downloadQuerySchema = z.object({ format: z.enum(['redirect', 'json']).default('redirect') });
+
+export const progressSchema = z.object({ progress: z.number().int() });
+
+export const observationSchema = z.object({
+  observation: z
+    .string()
+    .trim()
+    .max(1000, 'Notes are limited to 1000 characters')
+    .nullable()
+    .transform((v) => v || null),
+});

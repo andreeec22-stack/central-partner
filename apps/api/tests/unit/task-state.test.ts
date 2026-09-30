@@ -39,14 +39,14 @@ function expectValidation(fn: () => unknown, field: string) {
   }
 }
 
-describe('progress and semaphore', () => {
+describe('progress', () => {
   it('rejects progress outside the daily steps', () => {
     expectValidation(() => derive(snapshot(), { progress: 60 }), 'progress');
   });
 
-  it('derives the semaphore and starts the task on first progress', () => {
+  it('starts the task on first progress', () => {
     const { change, events } = derive(snapshot(), { progress: 75 });
-    expect(change).toMatchObject({ status: 'IN_PROGRESS', progress: 75, semaphore: 'YELLOW', actualStartDate: now });
+    expect(change).toMatchObject({ status: 'IN_PROGRESS', progress: 75, actualStartDate: now });
     expect(events.progressChanged).toBe(true);
   });
 
@@ -58,7 +58,6 @@ describe('progress and semaphore', () => {
     });
     expect(change).toMatchObject({
       status: 'DONE',
-      semaphore: 'GREEN',
       actualCompletionDate: now,
       actualDurationHours: 24,
       timeToCompletionHours: 52,
@@ -80,7 +79,7 @@ describe('progress and semaphore', () => {
   it('lowering progress reopens a DONE task and clears completion metrics', () => {
     const done = derive(snapshot({ status: 'IN_PROGRESS', progress: 75, actualStartDate: created }), { progress: 100 }).change;
     const { change, events } = derive(snapshot({ ...done }), { progress: 50 });
-    expect(change).toMatchObject({ status: 'IN_PROGRESS', progress: 50, semaphore: 'RED', actualCompletionDate: null, actualDurationHours: null });
+    expect(change).toMatchObject({ status: 'IN_PROGRESS', progress: 50, actualCompletionDate: null, actualDurationHours: null });
     expect(events.reopened).toBe(true);
   });
 

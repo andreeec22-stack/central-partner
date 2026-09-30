@@ -14,8 +14,11 @@ import {
   createTaskSchema,
   downloadQuerySchema,
   listTasksSchema,
+  observationSchema,
+  progressSchema,
   updateTaskSchema,
 } from './tasks.schemas';
+import { paginationSchema } from '../../lib/pagination';
 import * as tasks from './tasks.service';
 
 const writers = requireRole('ADMIN', 'JEFE_AREA', 'USER');
@@ -44,6 +47,19 @@ export const taskRoutes = new Hono<AppEnv>()
     const input = await parseJson(c, updateTaskSchema);
     return c.json(await tasks.updateTask(c.get('user'), id, input, clientContext(c)));
   })
+
+  // The daily ritual: pick 0/25/50/75/100 (same rules as PATCH /:id).
+  .patch('/:id/progress', writers, async (c) => {
+    const id = taskId(c);
+    const input = await parseJson(c, progressSchema);
+    return c.json(await tasks.updateTask(c.get('user'), id, input, clientContext(c)));
+  })
+  .patch('/:id/observation', writers, async (c) => {
+    const id = taskId(c);
+    const { observation } = await parseJson(c, observationSchema);
+    return c.json(await tasks.setTaskObservation(c.get('user'), id, observation, clientContext(c)));
+  })
+  .get('/:id/history', async (c) => c.json(await tasks.taskHistory(c.get('user'), taskId(c), parseQuery(c, paginationSchema))))
 
   .delete('/:id', requireRole('ADMIN', 'JEFE_AREA', 'USER'), async (c) => {
     await tasks.deleteTask(c.get('user'), idParam(c, 'id', 'Task'), clientContext(c));

@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
-import { notFound } from '../../lib/errors';
+import { z } from 'zod';
+import { notFound, validationError } from '../../lib/errors';
 import { extensionOf, LOGO_FILE_TYPES } from '../../lib/file-types';
 import { getStorage } from '../../lib/storage';
 import { readUpload, uploadLimit } from '../../lib/upload';
@@ -7,6 +8,9 @@ import { idParam, parseJson } from '../../lib/validation';
 import { requireAuth, requireRole } from '../../middleware/auth';
 import type { AppEnv } from '../../types';
 import { clientContext } from '../auth/auth.routes';
+import { prisma } from '../../lib/prisma';
+import { isValidTimeZone } from '../../lib/time';
+import { ActivityAction, logActivity } from '../audit/activity-log';
 import { updateBrandingSchema } from './branding.schemas';
 import * as branding from './branding.service';
 
@@ -26,7 +30,30 @@ export const brandingRoutes = new Hono<AppEnv>()
   })
   .delete('/:id/branding/logo', requireRole('ADMIN'), async (c) =>
     c.json(await branding.removeLogo(c.get('user'), workspaceId(c), clientContext(c))),
-  );
+  )
+  // The timezone defines the workspace's weeks (Monday–Saturday) and "today".
+  .get('/:id/settings', async (c) => {
+    const user = c.get('user');
+    if (workspaceId(c) !== user.workspaceId) throw notFound('Workspace');
+    return c.json({ settings: { timezone: user.workspaceTimezone } });
+  })
+  .patch('/:id/settings', requireRole('ADMIN'), async (c) => {
+    const user = c.get('user');
+    if (workspaceId(c) !== user.workspaceId) throw notFound('Workspace');
+    const { timezone } = await parseJson(c, z.object({ timezone: z.string().min(1).max(50) }));
+    if (!isValidTimeZone(timezone)) throw validationError('Unknown timezone', [{ field: 'timezone', message: 'invalid' }]);
+    await prisma.workspace.update({ where: { id: user.workspaceId }, data: { timezone } });
+    await logActivity({
+      workspaceId: user.workspaceId,
+      userId: user.id,
+      action: ActivityAction.WORKSPACE_SETTINGS_UPDATED,
+      entityType: 'Workspace',
+      entityId: user.workspaceId,
+      changes: { timezone: { old: user.workspaceTimezone, new: timezone } },
+      ipAddress: clientContext(c).ipAddress,
+    });
+    return c.json({ settings: { timezone } });
+  });
 
 const LOGO_MIME: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', svg: 'image/svg+xml' };
 

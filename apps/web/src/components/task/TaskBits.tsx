@@ -14,6 +14,7 @@ const semaphoreClass: Record<Semaphore, string> = {
   GREEN: 'bg-sem-green',
   YELLOW: 'bg-sem-yellow',
   RED: 'bg-sem-red',
+  GRAY: 'bg-line-strong',
 };
 
 export function SemaphoreDot({ value, blocked, size = 'md' }: { value: Semaphore; blocked?: boolean; size?: 'sm' | 'md' }) {

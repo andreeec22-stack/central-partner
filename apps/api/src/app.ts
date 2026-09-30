@@ -13,6 +13,7 @@ import { dashboardRoutes } from './modules/dashboard/dashboard.routes';
 import { departmentRoutes } from './modules/departments/departments.routes';
 import { excelImportRoutes } from './modules/excel-imports/excel-imports.routes';
 import { storageRoutes } from './modules/storage/storage.routes';
+import { areaRoutes, kpiRoutes, weekRoutes } from './modules/weeks/weeks.routes';
 import { taskRoutes } from './modules/tasks/tasks.routes';
 import { publicUserRoutes, userRoutes } from './modules/users/users.routes';
 import type { AppEnv } from './types';
@@ -54,6 +55,9 @@ export function createApp() {
   api.route('/users', publicUserRoutes);
   api.route('/users', userRoutes);
   api.route('/departments', departmentRoutes);
+  api.route('/departments', areaRoutes);
+  api.route('/weeks', weekRoutes);
+  api.route('/kpis', kpiRoutes);
   api.route('/tasks', taskRoutes);
   api.route('/dashboard', dashboardRoutes);
   api.route('/excel-imports', excelImportRoutes);

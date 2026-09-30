@@ -1,11 +1,11 @@
-import type { Priority, Semaphore, TaskStatus } from '@prisma/client';
+import type { Priority, TaskStatus } from '@prisma/client';
 import { validationError } from '../../lib/errors';
-import { isProgressStep, semaphoreFor } from '../../lib/semaphore';
+import { isProgressStep } from '../../lib/semaphore';
 
 // Pure transition rules for status / progress / blocking / completion metrics.
 // Kept free of I/O so every rule is unit-tested.
 //
-//   • progress must be one of 0/25/50/75/100; semaphore is always derived from it
+//   • progress must be one of 0/25/50/75/100 (the semaphore is derived on read, by date)
 //   • status DONE ⇔ progress 100 (setting either one implies the other)
 //   • progress > 0 on a TODO task moves it to IN_PROGRESS
 //   • dropping progress below 100 on a DONE task reopens it (IN_PROGRESS)
@@ -42,7 +42,6 @@ export interface TaskStatePatch {
 export interface TaskStateChange {
   status: TaskStatus;
   progress: number;
-  semaphore: Semaphore;
   blockReason: string | null;
   blockedSince: Date | null;
   blockedByUserId: string | null;
@@ -144,7 +143,6 @@ export function deriveTaskState(
   const change: TaskStateChange = {
     status,
     progress,
-    semaphore: semaphoreFor(progress),
     blockReason,
     blockedSince,
     blockedByUserId,

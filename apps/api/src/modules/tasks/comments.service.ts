@@ -9,6 +9,7 @@ import type { ClientContext } from '../auth/auth.service';
 import { notifySafely } from '../notifications/notify.service';
 import { extractMentions, mentionableUsers, resolveMentions, type Mentionable } from './mentions';
 import { findVisibleTask } from './task-access';
+import { assertWeekOpen } from '../weeks/weeks.service';
 
 export const MAX_COMMENTS_PER_TASK = 1000;
 
@@ -75,6 +76,7 @@ export async function listMentionable(user: AuthUser, taskId: string) {
 export async function createComment(user: AuthUser, taskId: string, content: string, ctx: ClientContext) {
   const task = await loadTask(user, taskId);
   if (!canContribute(user, task)) throw forbidden('You cannot comment on this task');
+  await assertWeekOpen(prisma, task.weekId);
 
   const people = await mentionableUsers(prisma, task.workspaceId, task.departmentId);
   const mentioned = resolveMentions(extractMentions(content), people).filter((id) => id !== user.id);
@@ -152,6 +154,7 @@ export async function updateComment(user: AuthUser, taskId: string, commentId: s
   const task = await loadTask(user, taskId);
   const current = await findComment(task, commentId);
   if (current.authorId !== user.id && user.role !== 'ADMIN') throw forbidden('Only the author or an administrator can edit this comment');
+  await assertWeekOpen(prisma, task.weekId);
 
   const people = await mentionableUsers(prisma, task.workspaceId, task.departmentId);
   const mentioned = resolveMentions(extractMentions(content), people).filter((id) => id !== current.authorId);
@@ -199,6 +202,7 @@ export async function deleteComment(user: AuthUser, taskId: string, commentId: s
   const task = await loadTask(user, taskId);
   const current = await findComment(task, commentId);
   if (current.authorId !== user.id && user.role !== 'ADMIN') throw forbidden('Only the author or an administrator can delete this comment');
+  await assertWeekOpen(prisma, task.weekId);
 
   await prisma.$transaction(async (tx) => {
     await tx.comment.update({ where: { id: current.id }, data: { deletedAt: new Date() } });

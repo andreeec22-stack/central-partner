@@ -21,10 +21,19 @@ export const ROLE_LABEL: Record<Role, string> = {
   VIEWER: 'Lector',
 };
 
+// Task semaphore (by date).
 export const SEMAPHORE_LABEL: Record<Semaphore, string> = {
+  GREEN: 'Completada',
+  YELLOW: 'Vence hoy',
+  RED: 'Atrasada',
+  GRAY: 'Aún no vence',
+};
+
+// Area / KPI semaphore (by index: ≥90% · 70–89% · <70%).
+export const INDEX_SEMAPHORE_LABEL: Record<Exclude<Semaphore, 'GRAY'>, string> = {
   GREEN: 'En meta',
   YELLOW: 'En riesgo',
-  RED: 'Atrasada',
+  RED: 'Crítico',
 };
 
 export const ACTIVITY_LABEL: Record<string, string> = {

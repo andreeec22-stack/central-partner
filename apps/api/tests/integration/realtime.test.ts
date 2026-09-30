@@ -5,7 +5,7 @@ import { io as connect, type Socket } from 'socket.io-client';
 import { prisma } from '../../src/lib/prisma';
 import { setRealtimeServer } from '../../src/lib/realtime';
 import { attachSocketServer } from '../../src/realtime/socket-server';
-import { createTask, seedWorkspace, type Seed } from './fixtures';
+import { createTask, dueAt, seedWorkspace, type Seed } from './fixtures';
 import { app, call, resetDatabase } from './helpers';
 
 let server: HttpServer;
@@ -82,7 +82,7 @@ describe('task events reach exactly the people who can see the task', () => {
   });
 
   it('progress, blocked and completed events carry their payloads', async () => {
-    const task = await createTask(s.mkt.jefe.token, { assignedTo: s.mkt.user.id, title: 'Reporte' });
+    const task = await createTask(s.mkt.jefe.token, { assignedTo: s.mkt.user.id, title: 'Reporte', dueDate: dueAt(1) });
     const jefe = await open(s.mkt.jefe.token);
     const progress = record(jefe, 'task:progress');
     const blocked = record(jefe, 'task:blocked');
@@ -95,11 +95,11 @@ describe('task events reach exactly the people who can see the task', () => {
     await settle();
 
     expect(progress.map((p) => [p.progress, p.semaphore])).toEqual([
-      [75, 'YELLOW'],
+      [75, 'GRAY'], // due tomorrow: not late yet
       [100, 'GREEN'],
     ]);
     expect(blocked).toEqual([expect.objectContaining({ taskId: task.id, reason: 'Falta arte', blockedByUserId: s.mkt.user.id })]);
-    expect(completed).toEqual([expect.objectContaining({ taskId: task.id, onTime: null })]);
+    expect(completed).toEqual([expect.objectContaining({ taskId: task.id, onTime: true })]); // finished before its day
     expect(updated).toHaveLength(3);
     expect(updated[0].changes.progress).toEqual({ old: 0, new: 75 });
   });
@@ -160,5 +160,34 @@ describe('collaboration events', () => {
     await call('PATCH', `/api/v1/workspaces/${s.workspaceId}/branding`, { token: s.admin.token, body: { colors: { primary: '#123456' } } });
     await settle();
     for (const events of got) expect(events[0].branding.colors.primary).toBe('#123456');
+  });
+});
+
+describe('weekly cycle events', () => {
+  it('KPI changes reach the area and ADMINs; closing a week reaches everyone', async () => {
+    const week = (await call('GET', '/api/v1/weeks/current', { token: s.admin.token })).body.week;
+    const [mkt, fin, admin] = await Promise.all([open(s.mkt.user.token), open(s.fin.user.token), open(s.admin.token)]);
+    const kpi = { mkt: record(mkt, 'kpi:changed'), fin: record(fin, 'kpi:changed'), admin: record(admin, 'kpi:changed') };
+    const closed = { mkt: record(mkt, 'week:closed'), fin: record(fin, 'week:closed') };
+
+    await call('POST', `/api/v1/departments/${s.marketing}/kpis`, { token: s.mkt.jefe.token, body: { weekId: week.id, title: 'Leads', target: 100 } });
+    await call('POST', `/api/v1/weeks/${week.id}/close`, { token: s.admin.token, body: { force: true } });
+    await settle();
+
+    expect(kpi.mkt).toEqual([{ departmentId: s.marketing, weekId: week.id }]);
+    expect(kpi.admin).toHaveLength(1);
+    expect(kpi.fin).toHaveLength(0);
+    expect(closed.mkt[0]).toMatchObject({ week: { id: week.id, status: 'ARCHIVED' }, carriedTasks: 0 });
+    expect(closed.fin).toHaveLength(1);
+  });
+
+  it('two simultaneous closings archive the week once', async () => {
+    const week = (await call('GET', '/api/v1/weeks/current', { token: s.admin.token })).body.week;
+    const results = await Promise.all([
+      call('POST', `/api/v1/weeks/${week.id}/close`, { token: s.admin.token, body: { force: true } }),
+      call('POST', `/api/v1/weeks/${week.id}/close`, { token: s.admin.token, body: { force: true } }),
+    ]);
+    expect(results.map((r) => r.status).sort()).toEqual([200, 409]);
+    expect(await prisma.weeklyArchive.count({ where: { weekId: week.id } })).toBe(1);
   });
 });

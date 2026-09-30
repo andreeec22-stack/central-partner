@@ -2,6 +2,7 @@ import type { Role } from '@prisma/client';
 import { hashPassword } from '../../src/lib/password';
 import { prisma } from '../../src/lib/prisma';
 import { startSession } from '../../src/modules/auth/auth.service';
+import { addDays, localDay } from '../../src/lib/week';
 import { call } from './helpers';
 
 export interface Actor {
@@ -81,4 +82,11 @@ export async function createTask(token: string, body: Record<string, unknown>) {
   const res = await call('POST', '/api/v1/tasks', { token, body });
   if (res.status !== 201) throw new Error(`task create failed (${res.status}): ${JSON.stringify(res.body)}`);
   return res.body.task as { id: string; [k: string]: any };
+}
+
+// Noon (Lima, the default workspace timezone) of the day `offset` days from today,
+// as an ISO instant: dueAt(-1) is yesterday, dueAt(0) today.
+export const WORKSPACE_TZ = 'America/Lima';
+export function dueAt(offset: number, now = new Date()) {
+  return `${addDays(localDay(now, WORKSPACE_TZ), offset)}T17:00:00.000Z`;
 }

@@ -10,6 +10,8 @@ export interface AuthUser {
   email: string;
   displayName: string;
   timezone: string;
+  // Defines weeks and "today" for the weekly cycle.
+  workspaceTimezone: string;
 }
 
 export interface AppEnv {
