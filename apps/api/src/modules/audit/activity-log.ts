@@ -49,6 +49,7 @@ export const ActivityAction = {
   FUNCTION_DELETED: 'FUNCTION_DELETED',
   TASK_OBSERVATION_SET: 'TASK_OBSERVATION_SET',
   WORKSPACE_SETTINGS_UPDATED: 'WORKSPACE_SETTINGS_UPDATED',
+  PERMISSIONS_UPDATED: 'PERMISSIONS_UPDATED',
 } as const;
 export type ActivityAction = (typeof ActivityAction)[keyof typeof ActivityAction];
 

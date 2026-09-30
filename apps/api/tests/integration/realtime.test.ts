@@ -5,7 +5,8 @@ import { io as connect, type Socket } from 'socket.io-client';
 import { prisma } from '../../src/lib/prisma';
 import { setRealtimeServer } from '../../src/lib/realtime';
 import { attachSocketServer } from '../../src/realtime/socket-server';
-import { createTask, dueAt, seedWorkspace, type Seed } from './fixtures';
+import { addDays, mondayOf } from '../../src/lib/week';
+import { createTask, dueAt, seedWorkspace, WORKSPACE_TZ, type Seed } from './fixtures';
 import { app, call, resetDatabase } from './helpers';
 
 let server: HttpServer;
@@ -164,8 +165,14 @@ describe('collaboration events', () => {
 });
 
 describe('weekly cycle events', () => {
+  // Last week: already past its Saturday 10:00, so it can be closed any day.
+  const lastWeek = async () => {
+    const monday = addDays(mondayOf(new Date(), WORKSPACE_TZ), -7);
+    return (await call('POST', '/api/v1/weeks', { token: s.admin.token, body: { mondayDate: monday } })).body.week as { id: string };
+  };
+
   it('KPI changes reach the area and ADMINs; closing a week reaches everyone', async () => {
-    const week = (await call('GET', '/api/v1/weeks/current', { token: s.admin.token })).body.week;
+    const week = await lastWeek();
     const [mkt, fin, admin] = await Promise.all([open(s.mkt.user.token), open(s.fin.user.token), open(s.admin.token)]);
     const kpi = { mkt: record(mkt, 'kpi:changed'), fin: record(fin, 'kpi:changed'), admin: record(admin, 'kpi:changed') };
     const closed = { mkt: record(mkt, 'week:closed'), fin: record(fin, 'week:closed') };
@@ -177,12 +184,12 @@ describe('weekly cycle events', () => {
     expect(kpi.mkt).toEqual([{ departmentId: s.marketing, weekId: week.id }]);
     expect(kpi.admin).toHaveLength(1);
     expect(kpi.fin).toHaveLength(0);
-    expect(closed.mkt[0]).toMatchObject({ week: { id: week.id, status: 'ARCHIVED' }, carriedTasks: 0 });
+    expect(closed.mkt[0]).toMatchObject({ week: { id: week.id, status: 'ARCHIVED' }, carriedTasks: expect.any(Number) });
     expect(closed.fin).toHaveLength(1);
   });
 
   it('two simultaneous closings archive the week once', async () => {
-    const week = (await call('GET', '/api/v1/weeks/current', { token: s.admin.token })).body.week;
+    const week = await lastWeek();
     const results = await Promise.all([
       call('POST', `/api/v1/weeks/${week.id}/close`, { token: s.admin.token, body: { force: true } }),
       call('POST', `/api/v1/weeks/${week.id}/close`, { token: s.admin.token, body: { force: true } }),

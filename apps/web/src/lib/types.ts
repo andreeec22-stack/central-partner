@@ -32,6 +32,7 @@ export interface Department {
   color: string | null;
   description: string | null;
   headId: string | null;
+  head?: { id: string; displayName: string } | null;
   usersCount: number;
 }
 

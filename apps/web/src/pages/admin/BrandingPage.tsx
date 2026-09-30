@@ -251,22 +251,11 @@ function BrandingForm({ branding, workspaceId }: { branding: Branding; workspace
   );
 }
 
-export default function BrandingPage() {
+// Logo, name, tagline and colors — part of Settings > Workspace.
+export function BrandingSection() {
   const workspaceId = useAuth((s) => s.workspace!.id);
   const branding = useBranding(workspaceId);
-  return (
-    <div className="space-y-5">
-      <div>
-        <h1 className="text-2xl font-extrabold tracking-tight">Marca del espacio</h1>
-        <p className="mt-1 text-sm text-muted">Logo, nombre y colores que ve todo tu equipo.</p>
-      </div>
-      {branding.isError ? (
-        <ErrorNotice message="No pudimos cargar la marca." onRetry={() => void branding.refetch()} />
-      ) : !branding.data ? (
-        <Skeleton className="h-96 w-full" />
-      ) : (
-        <BrandingForm branding={branding.data} workspaceId={workspaceId} />
-      )}
-    </div>
-  );
+  if (branding.isError) return <ErrorNotice message="No pudimos cargar la marca." onRetry={() => void branding.refetch()} />;
+  if (!branding.data) return <Skeleton className="h-96 w-full" />;
+  return <BrandingForm branding={branding.data} workspaceId={workspaceId} />;
 }

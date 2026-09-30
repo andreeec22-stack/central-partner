@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import { FileSpreadsheet, LayoutDashboard, ListChecks, LogOut, Menu, Palette, X } from 'lucide-react';
+import { BookOpen, Building2, CalendarDays, FileSpreadsheet, History, LayoutDashboard, ListChecks, LogOut, Menu, Settings2, ShieldCheck, Users, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router';
 import { useWorkspaceBranding } from '../../lib/branding';
@@ -49,11 +49,31 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         <div className="mt-8">
           <p className="px-3 pb-2 text-[11px] font-bold uppercase tracking-widest text-white/40">Administración</p>
           <nav aria-label="Administración" className="space-y-1">
+            <p className="px-3 pt-1 text-[11px] font-semibold text-white/40">Settings</p>
+            <NavLink to="/admin/settings/users" className={navItem} onClick={onNavigate}>
+              <Users className="size-4" aria-hidden /> Usuarios
+            </NavLink>
+            <NavLink to="/admin/settings/permissions" className={navItem} onClick={onNavigate}>
+              <ShieldCheck className="size-4" aria-hidden /> Permisos & roles
+            </NavLink>
+            <NavLink to="/admin/settings/departments" className={navItem} onClick={onNavigate}>
+              <Building2 className="size-4" aria-hidden /> Departamentos
+            </NavLink>
+            <NavLink to="/admin/settings/workspace" className={navItem} onClick={onNavigate}>
+              <Settings2 className="size-4" aria-hidden /> Workspace
+            </NavLink>
+            <p className="px-3 pt-3 text-[11px] font-semibold text-white/40">Operación</p>
+            <NavLink to="/admin/weeks" className={navItem} onClick={onNavigate}>
+              <CalendarDays className="size-4" aria-hidden /> Gestión de semanas
+            </NavLink>
+            <NavLink to="/admin/audit" className={navItem} onClick={onNavigate}>
+              <History className="size-4" aria-hidden /> Auditoría
+            </NavLink>
             <NavLink to="/admin/import" className={navItem} onClick={onNavigate}>
               <FileSpreadsheet className="size-4" aria-hidden /> Importar Excel
             </NavLink>
-            <NavLink to="/admin/branding" className={navItem} onClick={onNavigate}>
-              <Palette className="size-4" aria-hidden /> Marca
+            <NavLink to="/admin/docs" className={navItem} onClick={onNavigate}>
+              <BookOpen className="size-4" aria-hidden /> Documentación
             </NavLink>
           </nav>
         </div>

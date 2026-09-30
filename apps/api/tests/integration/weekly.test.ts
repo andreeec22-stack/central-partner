@@ -348,6 +348,23 @@ describe('dashboard', () => {
 });
 
 describe('closing a week', () => {
+  it('opens on Saturday at 10:00 (workspace time); the current week can’t close before', async () => {
+    const current = (await call('GET', '/api/v1/weeks/current', { token: s.admin.token })).body.week;
+    const check = await call('GET', `/api/v1/weeks/${current.id}/closure-check`, { token: s.admin.token });
+    const opensAt = new Date(check.body.closableAt);
+    // 10:00 in Lima (UTC-5) on the week's Saturday.
+    expect(opensAt.toISOString()).toBe(`${addDays(thisMonday(), 5)}T15:00:00.000Z`);
+    if (Date.now() < opensAt.getTime()) {
+      expect(check.body.canClose).toBe(false);
+      const res = await call('POST', `/api/v1/weeks/${current.id}/close`, { token: s.admin.token, body: { force: true } });
+      expect(res.status).toBe(409);
+      expect(res.body.error.code).toBe('WEEK_NOT_CLOSABLE_YET');
+    }
+    const past = await openWeek(lastMonday());
+    expect((await call('GET', `/api/v1/weeks/${past.id}/closure-check`, { token: s.admin.token })).body.canClose).toBe(true);
+  });
+
+
   it('reports what is missing and needs confirmation to close anyway', async () => {
     const week = await openWeek(lastMonday());
     await createTask(s.mkt.jefe.token, { title: 'Sin tocar', dueDate: on(week.mondayDate, 1) });

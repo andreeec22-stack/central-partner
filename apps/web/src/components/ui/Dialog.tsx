@@ -8,11 +8,13 @@ interface Props {
   description?: string;
   children: ReactNode;
   footer?: ReactNode;
+  // Room for tables (e.g. a week snapshot) instead of a form.
+  wide?: boolean;
 }
 
 // Native <dialog> + showModal(): focus trapping, Esc to close and the inert
 // background come from the browser.
-export function Dialog({ open, onClose, title, description, children, footer }: Props) {
+export function Dialog({ open, onClose, title, description, children, footer, wide }: Props) {
   const ref = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
@@ -38,7 +40,7 @@ export function Dialog({ open, onClose, title, description, children, footer }: 
       onClick={(e) => {
         if (e.target === ref.current) onClose(); // backdrop click
       }}
-      className="m-auto w-[min(34rem,calc(100vw-2rem))] rounded-2xl border border-line bg-surface p-0 text-ink shadow-pop"
+      className={`m-auto ${wide ? 'w-[min(64rem,calc(100vw-2rem))]' : 'w-[min(34rem,calc(100vw-2rem))]'} rounded-2xl border border-line bg-surface p-0 text-ink shadow-pop`}
       aria-labelledby="dialog-title"
     >
       {open && (

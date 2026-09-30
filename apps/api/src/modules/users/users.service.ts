@@ -7,7 +7,7 @@ import { sendMail } from '../../lib/mailer';
 import { hashPassword, verifyPassword } from '../../lib/password';
 import { invalidatePermissions } from '../../lib/permissions';
 import { prisma, type Tx } from '../../lib/prisma';
-import { disconnectUser } from '../../lib/realtime';
+import { disconnectUser, emitTo, rooms } from '../../lib/realtime';
 import { refreshUserRooms } from '../../realtime/socket-server';
 import type { AuthUser } from '../../types';
 import { ActivityAction, diffFields, logActivity } from '../audit/activity-log';
@@ -76,7 +76,7 @@ function grantFor(role: Role, requested: boolean | undefined): boolean {
 
 export async function listUsers(
   viewer: AuthUser,
-  q: { departmentId?: string; search?: string; status: 'active' | 'deleted' | 'all'; page: number; limit: number },
+  q: { departmentId?: string; role?: Role; search?: string; status: 'active' | 'deleted' | 'all'; page: number; limit: number },
 ) {
   // Deactivated accounts are an admin concern.
   const status = viewer.role === 'ADMIN' ? q.status : 'active';
@@ -84,6 +84,7 @@ export async function listUsers(
     workspaceId: viewer.workspaceId,
     ...(status === 'active' ? { deletedAt: null } : status === 'deleted' ? { deletedAt: { not: null } } : {}),
     ...(q.departmentId ? { departmentId: q.departmentId } : {}),
+    ...(q.role ? { role: q.role } : {}),
     ...(q.search
       ? {
           OR: [
@@ -169,7 +170,8 @@ export async function inviteUser(admin: AuthUser, input: InviteInput, ctx: Clien
       `como ${ROLE_LABEL[input.role]}.\n\nAcepta la invitación y crea tu contraseña aquí (válido 24 horas):\n${link}\n`,
   }).catch((error) => logger.error('invitation email failed', { invitationId: invitation.id, error }));
 
-  return { invitationSent: true, invitationId: invitation.id, expiresAt };
+  // The admin gets the link too, to share it by chat when email isn't set up.
+  return { invitationSent: true, invitationId: invitation.id, expiresAt, inviteUrl: link };
 }
 
 export async function listPendingInvitations(admin: AuthUser) {
@@ -274,7 +276,7 @@ async function applyUserUpdate(
   ctx: ClientContext,
   guard?: (tx: Tx, target: { email: string; passwordHash: string }) => Promise<void>,
 ) {
-  const { updated, accessChanged } = await prisma.$transaction(async (tx) => {
+  const { updated, accessChanged, grantChanged } = await prisma.$transaction(async (tx) => {
     const target = await tx.user.findFirst({
       where: { id: userId, workspaceId: actor.workspaceId, deletedAt: null },
       include: { notificationPrefs: true },
@@ -343,13 +345,15 @@ async function applyUserUpdate(
         tx,
       );
     }
-    return { updated, accessChanged: 'role' in changes || 'departmentId' in changes };
+    return { updated, accessChanged: 'role' in changes || 'departmentId' in changes, grantChanged: 'canCreateTasks' in changes };
   });
 
   if (accessChanged) {
     await invalidatePermissions(userId);
     await refreshUserRooms(userId);
   }
+  // Their open screens re-read who they are and what they can do.
+  if (accessChanged || grantChanged) emitTo([rooms.user(userId)], 'permissions:updated', { userId });
   return { user: present(updated, actor) };
 }
 

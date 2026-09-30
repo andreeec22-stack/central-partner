@@ -9,8 +9,14 @@ import { useAuth } from './stores/auth';
 // Code-split per page; the shell and auth screens stay in the main bundle.
 const DashboardPage = lazy(() => import('./pages/DashboardPage'));
 const TasksPage = lazy(() => import('./pages/TasksPage'));
-const BrandingPage = lazy(() => import('./pages/admin/BrandingPage'));
 const DataImportPage = lazy(() => import('./pages/admin/DataImportPage'));
+const AdminUsersPage = lazy(() => import('./pages/admin/AdminUsersPage'));
+const PermissionsPage = lazy(() => import('./pages/admin/PermissionsPage'));
+const DepartmentsPage = lazy(() => import('./pages/admin/DepartmentsPage'));
+const WorkspaceSettingsPage = lazy(() => import('./pages/admin/WorkspaceSettingsPage'));
+const WeekManagementPage = lazy(() => import('./pages/admin/WeekManagementPage'));
+const AuditLogsPage = lazy(() => import('./pages/admin/AuditLogsPage'));
+const DocsPage = lazy(() => import('./pages/admin/DocsPage'));
 
 function FullScreenSpinner() {
   return (
@@ -76,7 +82,17 @@ export const router = createBrowserRouter([
             element: <RequireAdmin />,
             children: [
               { path: '/admin/import', element: page(<DataImportPage />) },
-              { path: '/admin/branding', element: page(<BrandingPage />) },
+              { path: '/admin/settings/users', element: page(<AdminUsersPage />) },
+              { path: '/admin/settings/permissions', element: page(<PermissionsPage />) },
+              { path: '/admin/settings/departments', element: page(<DepartmentsPage />) },
+              { path: '/admin/settings/workspace', element: page(<WorkspaceSettingsPage />) },
+              { path: '/admin/weeks', element: page(<WeekManagementPage />) },
+              { path: '/admin/audit', element: page(<AuditLogsPage />) },
+              { path: '/admin/docs', element: page(<DocsPage />) },
+              // Old links.
+              { path: '/admin/branding', element: <Navigate to="/admin/settings/workspace" replace /> },
+              { path: '/admin', element: <Navigate to="/admin/settings/users" replace /> },
+              { path: '/admin/settings', element: <Navigate to="/admin/settings/users" replace /> },
             ],
           },
         ],

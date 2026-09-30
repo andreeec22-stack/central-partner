@@ -55,25 +55,26 @@ async function main() {
       name: 'Central Partner',
       slug: SLUG,
       timezone: TZ,
+      contactEmail: 'director@central.local',
       branding: { create: { workspaceName: 'Central Partner', tagline: 'Gastronomía • Personas • Crecimiento' } },
     },
   });
 
   const dept = async (name: string, slug: string, color: string) => prisma.department.create({ data: { workspaceId: ws.id, name, slug, color } });
-  
+
   // 13 areas from director's Excel
   const depts = await Promise.all([
     dept('Marketing', 'marketing', '#8b5cf6'),
     dept('Community', 'community', '#ec4899'),
-    dept('Diseño', 'diseno', '#06b6d4'),
+    dept('Diseño', 'diseno', '#14b8a6'),
     dept('Diseño Audiovisual', 'diseno-audiovisual', '#0ea5e9'),
     dept('RRHH - Nómina', 'rrhh-nomina', '#f97316'),
     dept('RRHH - Relaciones Sociales', 'rrhh-rrss', '#d97706'),
-    dept('Clima Laboral', 'clima-laboral', '#a855f7'),
-    dept('Finanzas', 'finanzas', '#0ea5e9'),
+    dept('Clima Laboral', 'clima-laboral', '#db2777'),
+    dept('Finanzas', 'finanzas', '#06b6d4'),
     dept('Tesorería', 'tesoreria', '#3b82f6'),
     dept('Asist. Contable', 'asist-contable', '#6366f1'),
-    dept('Prácticante Contable', 'pract-contable', '#8b5cf6'),
+    dept('Practicante Contable', 'pract-contable', '#a855f7'),
     dept('Auxiliar Contable', 'aux-contable', '#7c3aed'),
     dept('Auditoría y Calidad', 'auditoria-calidad', '#1e40af'),
   ]);
@@ -100,12 +101,12 @@ async function main() {
   const jefeCom = await user('jefe.community@central.local', 'Jefe Community', 'JEFE_AREA', community.id, true);
   const jefeDis = await user('jefe.diseno@central.local', 'Jefe Diseño', 'JEFE_AREA', diseno.id, true);
   const jefeFin = await user('jefe.finanzas@central.local', 'Jefe Finanzas', 'JEFE_AREA', finanzas.id, false);
-  
+
   const ana = await user('ana.gomez@central.local', 'Ana Gómez', 'USER', marketing.id);
   const luis = await user('luis.perez@central.local', 'Luis Pérez', 'USER', community.id);
   const carla = await user('carla.ruiz@central.local', 'Carla Ruiz', 'USER', finanzas.id);
   const nora = await user('nora.nomina@central.local', 'Nora Nómina', 'USER', rhhnomina.id);
-  
+
   await user('viewer@central.local', 'Lector', 'VIEWER', marketing.id);
 
   // Assign heads
@@ -168,7 +169,7 @@ async function main() {
   const addDefinitions = async (weekId: string, historyIndex: number | null) => {
     for (const a of areas) {
       await prisma.kpi.createMany({
-        data: a.kpis.map((k, order) => ({
+        data: a.kpis.map((k: any, order) => ({
           workspaceId: ws.id,
           weekId,
           departmentId: a.dept.id,
@@ -185,14 +186,14 @@ async function main() {
         })),
       });
       await prisma.departmentFunction.createMany({
-        data: a.functions.map((f, order) => ({
+        data: a.functions.map((f: any, order) => ({
           workspaceId: ws.id,
           weekId,
           departmentId: a.dept.id,
           title: f.title,
           frequency: f.frequency,
           order,
-          fulfilled: historyIndex === null ? null : f.history[historyIndex]!,
+          fulfilled: historyIndex === null ? null : (f.history[historyIndex]! as 'YES' | 'PARTIAL' | 'NO'),
           markedAt: historyIndex === null ? null : now,
           createdById: a.head?.id ?? director.id,
         })),
@@ -228,7 +229,9 @@ async function main() {
   };
 
   // Closed weeks with history
-  const PROGRESS_PATTERN = [[100, 100, 75, 100], [100, 50, 100, 75], [100, 100, 100, 25]];
+  // Oldest → newest closed week: completion improves week over week, so the
+  // dashboard's history charts show a rising trend (≈ 81% → 88% → 94% of tasks done).
+  const PROGRESS_PATTERN = [[100, 75, 50, 100], [100, 100, 50, 100], [100, 100, 100, 75]];
   let lastClosed: { id: string; monday: string } | null = null;
   for (let i = HISTORY_WEEKS; i >= 1; i--) {
     const monday = addDays(currentMonday, -7 * i);
@@ -280,7 +283,7 @@ async function main() {
       { title: 'Flujo de caja Q4', day: 3, to: jefeFin.id, progress: 75, priority: 'URGENT' },
     ] },
   ];
-  
+
   let taskCount = 0;
   for (const area of thisWeek) {
     for (const t of area.tasks) {
@@ -293,6 +296,21 @@ async function main() {
     const carried = await prisma.task.findFirst({ where: { weekId: lastClosed.id, progress: { lt: 100 } } });
     if (carried) await prisma.task.update({ where: { id: carried.id }, data: { weekId: current.id, carriedFromWeekId: lastClosed.id } });
   }
+
+  // So the Auditoría page starts with the workspace's origin.
+  await prisma.activityLog.createMany({
+    data: [
+      { workspaceId: ws.id, userId: director.id, action: 'WORKSPACE_CREATED', entityType: 'Workspace', entityId: ws.id, metadata: { name: ws.name, source: 'seed' } },
+      ...(await prisma.department.findMany({ where: { workspaceId: ws.id }, select: { id: true, name: true } })).map((d) => ({
+        workspaceId: ws.id,
+        userId: director.id,
+        action: 'DEPARTMENT_CREATED',
+        entityType: 'Department',
+        entityId: d.id,
+        metadata: { name: d.name, source: 'seed' },
+      })),
+    ],
+  });
 
   console.log(
     `✅ Seeded "${ws.name}": ${HISTORY_WEEKS} closed weeks + week ${current.weekNumber} with ${taskCount} tasks.`,

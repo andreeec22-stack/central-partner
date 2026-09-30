@@ -1,3 +1,4 @@
+import { TZDate } from '@date-fns/tz';
 import type { Prisma, Week } from '@prisma/client';
 import { AppError, conflict, notFound, validationError } from '../../lib/errors';
 import { logger } from '../../lib/logger';
@@ -202,6 +203,34 @@ export async function resolveWeek(user: AuthUser, ref: string | undefined) {
   return findWeek(user, ref);
 }
 
+// Closed weeks, newest first, with the numbers they closed at.
+export async function listArchivedWeeks(user: AuthUser, q: { page: number; limit: number }) {
+  const where = { workspaceId: user.workspaceId, status: 'ARCHIVED' as const };
+  const [weeks, total] = await Promise.all([
+    prisma.week.findMany({ where, orderBy: { mondayDate: 'desc' }, skip: (q.page - 1) * q.limit, take: q.limit, include: { archive: { select: { data: true } } } }),
+    prisma.week.count({ where }),
+  ]);
+  const closers = await prisma.user.findMany({
+    where: { id: { in: weeks.map((w) => w.archivedById).filter((id): id is string => !!id) } },
+    select: { id: true, displayName: true },
+  });
+  return {
+    data: weeks.map((w) => {
+      const overall = (w.archive?.data as unknown as WeekData | undefined)?.overall;
+      return {
+        ...presentWeek(w),
+        archivedBy: closers.find((u) => u.id === w.archivedById) ?? null,
+        index: overall?.index ?? null,
+        semaphore: overall?.semaphore ?? null,
+        tasks: overall?.tasks ?? null,
+      };
+    }),
+    total,
+    page: q.page,
+    limit: q.limit,
+  };
+}
+
 export async function listWeeks(user: AuthUser, limit: number) {
   const current = await currentWeek(user.workspaceId, user.workspaceTimezone);
   const weeks = await prisma.week.findMany({
@@ -246,6 +275,15 @@ export interface ClosureIssue {
 
 // What's still unfilled, per area: tasks already due still at 0%, KPIs
 // without a real value, functions not marked, areas with nothing defined.
+// The weekly closing happens on Saturday from 10:00 (workspace time), after
+// the KPI and function results are in. Earlier weeks can be closed any time.
+export const CLOSING_HOUR = 10;
+
+export function closableAt(week: Week, timeZone: string): Date {
+  const [y, m, d] = saturdayOf(dateToDay(week.mondayDate)).split('-').map(Number);
+  return new Date(new TZDate(y!, m! - 1, d!, CLOSING_HOUR, 0, 0, timeZone).getTime());
+}
+
 export async function closureReport(user: AuthUser, week: Week, now = new Date()) {
   const data = await buildWeekData(prisma, week, user.workspaceTimezone, null, now);
   const today = localDay(now, user.workspaceTimezone);
@@ -266,13 +304,19 @@ export async function closureReport(user: AuthUser, week: Week, now = new Date()
     week: presentWeek(week),
     departments,
     incompleteCount: departments.filter((d) => !d.complete).length,
-    canClose: week.status === 'ACTIVE',
+    closableAt: closableAt(week, user.workspaceTimezone),
+    canClose: week.status === 'ACTIVE' && now >= closableAt(week, user.workspaceTimezone),
   };
 }
 
 export async function closeWeek(user: AuthUser, weekId: string, force: boolean, ctx: ClientContext) {
   const week = await findWeek(user, weekId);
   if (week.status === 'ARCHIVED') throw weekClosedError();
+  const opensAt = closableAt(week, user.workspaceTimezone);
+  if (new Date() < opensAt) {
+    const when = new Intl.DateTimeFormat('es', { weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit', timeZone: user.workspaceTimezone }).format(opensAt);
+    throw new AppError(409, 'WEEK_NOT_CLOSABLE_YET', `La semana ${week.weekNumber} se puede cerrar desde el ${when}`, { closableAt: opensAt });
+  }
   const report = await closureReport(user, week);
   if (report.incompleteCount > 0 && !force) {
     throw new AppError(409, 'WEEK_INCOMPLETE', `${report.incompleteCount} áreas tienen datos sin llenar. ¿Cerrar de todas formas?`, report);

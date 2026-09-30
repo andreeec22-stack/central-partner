@@ -124,6 +124,8 @@ model Workspace {
   slug                String    @unique @db.VarChar(80)
   // IANA zone that defines the workspace's weeks (Monday-Saturday) and "today".
   timezone            String    @default("America/Lima") @db.VarChar(50)
+  // Shown in Settings > Workspace; where people can reach the company.
+  contactEmail        String?   @db.VarChar(254)
   // Confirmación E: soft delete + 30-day grace period before hard delete.
   deleteRequestedAt   DateTime?
   deleteRequestedById String?   @db.Uuid

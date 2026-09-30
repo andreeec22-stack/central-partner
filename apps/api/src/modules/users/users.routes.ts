@@ -32,6 +32,11 @@ export const userRoutes = new Hono<AppEnv>()
     const input = await parseJson(c, inviteSchema);
     return c.json(await users.inviteUser(c.get('user'), input, clientContext(c)), 201);
   })
+  // "Nuevo usuario" = an invitation: the person sets their own password.
+  .post('/', requireRole('ADMIN'), async (c) => {
+    const input = await parseJson(c, inviteSchema);
+    return c.json(await users.inviteUser(c.get('user'), input, clientContext(c)), 201);
+  })
   .get('/invitations', requireRole('ADMIN'), async (c) => c.json(await users.listPendingInvitations(c.get('user'))))
   .delete('/invitations/:id', requireRole('ADMIN'), async (c) => {
     await users.revokeInvitation(c.get('user'), idParam(c, 'id', 'Invitation'));

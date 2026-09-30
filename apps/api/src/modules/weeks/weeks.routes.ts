@@ -9,6 +9,9 @@ import { clientContext } from '../auth/auth.routes';
 import { createFunctionSchema, createKpiSchema, updateFunctionSchema, updateKpiSchema, weekQuerySchema } from './area.schemas';
 import * as area from './area.service';
 import * as weeks from './weeks.service';
+import { exportDashboardExcel } from '../dashboard/export';
+import { contentDisposition } from '../../lib/storage';
+import { paginationSchema } from '../../lib/pagination';
 
 const weekId = (c: Parameters<typeof idParam>[0]) => idParam(c, 'id', 'Week');
 const deptId = (c: Parameters<typeof idParam>[0]) => idParam(c, 'id', 'Department');
@@ -37,6 +40,8 @@ export const weekRoutes = new Hono<AppEnv>()
     const { week, created } = await weeks.ensureWeek(user.workspaceId, monday, user.id);
     return c.json({ week: weeks.presentWeek(week), created }, created ? 201 : 200);
   })
+  // Registered before '/:id'.
+  .get('/archived', async (c) => c.json(await weeks.listArchivedWeeks(c.get('user'), parseQuery(c, paginationSchema.extend({ limit: z.coerce.number().int().min(1).max(100).default(20) })))))
   .get('/:id', async (c) => {
     const user = c.get('user');
     const week = await weeks.findWeek(user, weekId(c));
@@ -50,6 +55,17 @@ export const weekRoutes = new Hono<AppEnv>()
     const id = weekId(c);
     const body = c.req.header('content-type')?.includes('application/json') ? await parseJson(c, closeSchema) : { force: false };
     return c.json(await weeks.closeWeek(c.get('user'), id, body.force, clientContext(c)));
+  })
+  // The week (its frozen snapshot when archived) as an Excel file.
+  .post('/:id/export', requireRole('ADMIN'), async (c) => {
+    const user = c.get('user');
+    const week = await weeks.findWeek(user, weekId(c));
+    const { buffer, filename } = await exportDashboardExcel(user, week.id);
+    return c.body(buffer, 200, {
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': contentDisposition('attachment', filename),
+      'Cache-Control': 'no-store',
+    });
   })
   // The frozen copy made at closing (live data for a week still open).
   .get('/:id/archive', async (c) => {

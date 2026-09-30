@@ -9,6 +9,7 @@ const timeOfDay = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Use HH:mm');
 
 export const listUsersSchema = z.object({
   departmentId: z.string().uuid().optional(),
+  role: roleSchema.optional(),
   search: z.string().trim().max(100).optional(),
   status: z.enum(['active', 'deleted', 'all']).default('active'),
   page: z.coerce.number().int().min(1).default(1),
