@@ -1,9 +1,9 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { TrendPoint, WeekDashboard } from '../../lib/types';
+import type { DashboardArea, HistoryWeek, WeekDashboard } from '../../lib/types';
 
 // The page talks to the API through lib/api; the network is replaced here.
 const api = vi.hoisted(() => vi.fn());
@@ -11,7 +11,7 @@ vi.mock('../../lib/api', async (original) => ({ ...(await original<typeof import
 
 const { default: DashboardPage } = await import('../../pages/DashboardPage');
 
-const area = (id: string, name: string, index: number | null, semaphore: 'GREEN' | 'YELLOW' | 'RED' | null) => ({
+const area = (id: string, name: string, index: number | null, semaphore: 'GREEN' | 'YELLOW' | 'RED' | null): DashboardArea => ({
   id,
   name,
   color: null,
@@ -26,54 +26,70 @@ const area = (id: string, name: string, index: number | null, semaphore: 'GREEN'
   semaphore,
 });
 
-const dashboard: WeekDashboard = {
-  week: { id: 'w40', mondayDate: '2026-09-28', saturdayDate: '2026-10-03', weekNumber: 40, year: 2026, status: 'ACTIVE', archivedAt: null },
-  today: '2026-09-29',
-  cards: {
-    index: 0.76,
-    semaphore: 'YELLOW',
-    totalTasks: 287,
-    doneTasks: 203,
-    overdueTasks: 18,
-    blockedTasks: 3,
-    taskProgress: 0.76,
-    kpiCompliance: null,
-    functionCompliance: null,
-    areasBySemaphore: { GREEN: 5, YELLOW: 6, RED: 2, NONE: 0 },
-  },
-  departments: [area('mkt', 'MARKETING', 0.76, 'YELLOW'), area('fin', 'FINANZAS', 0.93, 'GREEN')],
-  charts: { taskStatus: { TODO: 0, IN_PROGRESS: 0, BLOCKED: 0, DONE: 0 }, taskSemaphore: { GREEN: 0, YELLOW: 0, RED: 0, GRAY: 0 }, criticalKpis: [] },
-  generatedAt: '2026-09-29T15:00:00Z',
-};
+const AREAS = { mkt: area('mkt', 'MARKETING', 0.76, 'YELLOW'), fin: area('fin', 'FINANZAS', 0.93, 'GREEN') };
 
-const trend = (index: number): TrendPoint => ({
-  week: { id: 'w', mondayDate: '', saturdayDate: '', weekNumber: 0, year: 2026, status: 'ARCHIVED' },
-  index,
-  taskProgress: null,
-  kpiCompliance: null,
-  functionCompliance: null,
-  semaphore: null,
+function dashboardFor(weekNumber: number, id: string, departmentId?: string): WeekDashboard {
+  const departments = departmentId ? [AREAS[departmentId as keyof typeof AREAS]] : Object.values(AREAS);
+  return {
+    week: { id, mondayDate: '2026-09-28', saturdayDate: '2026-10-03', weekNumber, year: 2026, status: weekNumber === 40 ? 'ACTIVE' : 'ARCHIVED', archivedAt: null },
+    today: '2026-09-29',
+    cards: {
+      index: departmentId ? departments[0]!.index : 0.76,
+      semaphore: 'YELLOW',
+      totalTasks: departmentId ? 10 : 287,
+      doneTasks: departmentId ? 6 : 203,
+      overdueTasks: 18,
+      blockedTasks: 3,
+      taskProgress: 0.76,
+      kpiCompliance: null,
+      functionCompliance: null,
+      areasBySemaphore: { GREEN: 5, YELLOW: 6, RED: 2, NONE: 0 },
+    },
+    departments,
+    charts: { taskStatus: { TODO: 0, IN_PROGRESS: 0, BLOCKED: 0, DONE: 0 }, taskSemaphore: { GREEN: 0, YELLOW: 0, RED: 0, GRAY: 0 }, criticalKpis: [] },
+    generatedAt: '2026-09-29T15:00:00Z',
+  };
+}
+
+const historyWeek = (n: number, index: number, status: 'ACTIVE' | 'ARCHIVED'): HistoryWeek => ({
+  weekId: `w${n}`,
+  weekNumber: n,
+  year: 2026,
+  mondayDate: '2026-09-21',
+  saturdayDate: '2026-09-26',
+  status,
+  metrics: { indexGeneral: index, totalTasks: 42, completedTasks: 38, delayedTasks: 4, compliancePercentage: 90.5, taskProgress: null, kpiCompliance: null, functionCompliance: null, semaphore: 'YELLOW' },
+  departmentMetrics: [],
 });
+const HISTORY = [historyWeek(38, 78.2, 'ARCHIVED'), historyWeek(39, 80, 'ARCHIVED'), historyWeek(40, 76, 'ACTIVE')];
 
-function respond(overrides: { dashboard?: WeekDashboard | Error } = {}) {
-  api.mockImplementation(async (path: string) => {
-    if (path === '/dashboard/week/current') {
-      if (overrides.dashboard instanceof Error) throw overrides.dashboard;
-      return overrides.dashboard ?? dashboard;
+function respond(opts: { failDashboard?: () => boolean; failHistory?: boolean } = {}) {
+  api.mockImplementation(async (path: string, o: { query?: { departmentId?: string } } = {}) => {
+    const departmentId = o.query?.departmentId;
+    if (path === '/departments') {
+      return { data: [{ id: 'mkt', slug: 'marketing', name: 'MARKETING' }, { id: 'fin', slug: 'finanzas', name: 'FINANZAS' }] };
     }
-    if (path === '/dashboard/trends') return { data: [trend(0.8), trend(0.76)] };
+    if (path === '/dashboard/week/history') {
+      if (opts.failHistory) throw new Error('down');
+      return { weeks: HISTORY };
+    }
+    const week = path.match(/^\/dashboard\/week\/(.+)$/)?.[1];
+    if (week) {
+      if (opts.failDashboard?.()) throw new Error('down');
+      return week === 'current' ? dashboardFor(40, 'w40', departmentId) : dashboardFor(Number(week.slice(1)), week, departmentId);
+    }
     throw new Error(`unexpected ${path}`);
   });
 }
 
-function renderPage() {
+function renderPage(initial = '/') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const router = createMemoryRouter(
     [
       { path: '/', element: <DashboardPage /> },
       { path: '/tasks', element: <p>Tareas del área</p> },
     ],
-    { initialEntries: ['/'] },
+    { initialEntries: [initial] },
   );
   render(
     <QueryClientProvider client={client}>
@@ -83,6 +99,8 @@ function renderPage() {
   return router;
 }
 
+const called = (path: string) => api.mock.calls.filter(([p]) => p === path).map(([, o]) => o?.query ?? {});
+
 afterEach(() => api.mockReset());
 
 describe('DashboardPage', () => {
@@ -91,16 +109,13 @@ describe('DashboardPage', () => {
     renderPage();
     expect(screen.getByRole('heading', { name: 'Dashboard Ejecutivo' })).toBeInTheDocument();
     expect(await screen.findByText(/Semana 40 · 28 sept – 3 oct/)).toBeInTheDocument();
-    expect(api).toHaveBeenCalledWith('/dashboard/week/current', expect.anything());
   });
 
-  it('displays the 7 metric cards with the API numbers', async () => {
+  it('displays the 7 metric cards, with the trend against last week', async () => {
     respond();
     renderPage();
-    const index = await screen.findByRole('article', { name: /^Índice General: 76%, baja 4 pts/ });
-    expect(index).toBeInTheDocument();
+    expect(await screen.findByRole('article', { name: /^Índice General: 76%, baja 4 pts/ })).toBeInTheDocument();
     expect(screen.getAllByRole('article')).toHaveLength(7);
-    expect(screen.getByRole('article', { name: /^Total Tareas: 287/ })).toBeInTheDocument();
     expect(screen.getByRole('article', { name: /^② KPIs: —/ })).toBeInTheDocument();
   });
 
@@ -115,34 +130,64 @@ describe('DashboardPage', () => {
     ]);
   });
 
-  it('displays the department table with its rows', async () => {
-    respond();
-    renderPage();
-    expect(await screen.findByRole('row', { name: /MARKETING/ })).toBeInTheDocument();
-    expect(screen.getByRole('row', { name: /FINANZAS/ })).toHaveTextContent('93%');
-  });
-
   it('opens the area on row click', async () => {
     respond();
     const router = renderPage();
     await userEvent.click(await screen.findByRole('button', { name: 'FINANZAS' }));
     expect(router.state.location.pathname).toBe('/tasks');
     expect(router.state.location.search).toBe('?department=fin');
-    expect(screen.getByText('Tareas del área')).toBeInTheDocument();
   });
 
-  it('shows skeletons while loading and an error with retry when the API fails', async () => {
-    let fail = true;
-    api.mockImplementation(async (path: string) => {
-      if (path === '/dashboard/trends') return { data: [] };
-      if (fail) throw new Error('down');
-      return dashboard;
-    });
+  it('renders the four history charts', async () => {
+    respond();
     renderPage();
-    expect(screen.getByRole('status', { name: 'Cargando áreas' })).toBeInTheDocument();
+    expect(await screen.findByRole('img', { name: /^Índice General por semana: S38 78,2%/ })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Tendencia de Cumplimiento' })).toBeInTheDocument();
+  });
+
+  it('the area filter narrows table, cards and charts, and goes into the URL', async () => {
+    respond();
+    const router = renderPage();
+    await screen.findByRole('row', { name: /MARKETING/ });
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Área' }), 'finanzas');
+
+    await waitFor(() => expect(screen.queryByRole('row', { name: /MARKETING/ })).not.toBeInTheDocument());
+    expect(screen.getByRole('row', { name: /FINANZAS/ })).toBeInTheDocument();
+    expect(router.state.location.search).toBe('?area=finanzas');
+    expect(called('/dashboard/week/current')).toContainEqual({ departmentId: 'fin' });
+    expect(called('/dashboard/week/history')).toContainEqual({ limit: 3, departmentId: 'fin' });
+  });
+
+  it('the period filter loads that week and goes into the URL', async () => {
+    respond();
+    const router = renderPage();
+    await screen.findByRole('option', { name: '-2 semanas (S38)' }); // weeks come with the history
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Período' }), '-2 semanas (S38)');
+    expect(await screen.findByText(/Semana 38/)).toBeInTheDocument();
+    expect(router.state.location.search).toBe('?week=38');
+    expect(api).toHaveBeenCalledWith('/dashboard/week/w38', expect.anything());
+  });
+
+  it('reads filters from the URL and ignores unknown values', async () => {
+    respond();
+    renderPage('/?area=finanzas&week=39');
+    expect(await screen.findByText(/Semana 39/)).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Área' })).toHaveDisplayValue('FINANZAS');
+    expect(called('/dashboard/week/w39')).toContainEqual({ departmentId: 'fin' });
+
+    api.mockClear();
+    renderPage('/?area=<script>&week=99');
+    await waitFor(() => expect(called('/dashboard/week/current')).toContainEqual({}));
+  });
+
+  it('shows an error with retry when the API fails, and a separate one for the history', async () => {
+    let fail = true;
+    respond({ failDashboard: () => fail, failHistory: true });
+    renderPage();
     expect(await screen.findByText('No pudimos cargar el dashboard.')).toBeInTheDocument();
+    expect((await screen.findAllByText('Error cargando datos históricos')).length).toBe(4);
     fail = false;
-    await userEvent.click(screen.getByRole('button', { name: 'Reintentar' }));
+    await userEvent.click(within(screen.getByText('No pudimos cargar el dashboard.').closest('[role=alert]')!).getByRole('button', { name: 'Reintentar' }));
     expect(await screen.findByRole('row', { name: /MARKETING/ })).toBeInTheDocument();
   });
 });

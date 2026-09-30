@@ -281,19 +281,69 @@ describe('dashboard', () => {
     expect(mkt.body.data[0].index).toBe(0.725);
   });
 
-  it('exports the week to Excel', async () => {
+  it('exports the week to Excel with a title block and one row per area', async () => {
     const { week } = await prepareLastWeek();
     const res = await app.request(`/api/v1/dashboard/export/excel?weekId=${week.id}`, { headers: { authorization: `Bearer ${s.admin.token}` } });
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('spreadsheetml');
-    expect(res.headers.get('content-disposition')).toMatch(/central-partner-semana-\d{4}-\d{2}\.xlsx/);
+    expect(res.headers.get('content-disposition')).toContain(`DashboardCentralPartner_Week${week.weekNumber}.xlsx`);
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(await res.arrayBuffer());
     expect(wb.worksheets.map((w) => w.name)).toEqual(['Resumen', 'Tareas', 'KPIs', 'Funciones']);
     const summary = wb.getWorksheet('Resumen')!;
-    expect(summary.getRow(1).values).toContain('Índice');
-    const marketingRow = summary.getRows(2, 2)!.find((r) => r.getCell(1).value === 'Marketing')!;
-    expect(marketingRow.getCell(10).value).toBe(0.725);
+    expect(summary.getCell('A1').value).toBe('Central Partner - Dashboard');
+    expect(String(summary.getCell('A2').value)).toMatch(new RegExp(`^Semana ${week.weekNumber} .*Todas las áreas · Generado: `));
+    expect(summary.getRow(4).values).toEqual(expect.arrayContaining(['Área', 'Jefe', 'Total Tareas', '% Completadas', 'Atrasadas', 'Índice']));
+    expect(summary.views[0]).toMatchObject({ state: 'frozen', ySplit: 4 });
+    const rows = summary.getRows(5, 3)!;
+    const marketing = rows.find((r) => r.getCell(1).value === 'Marketing')!;
+    expect(marketing.getCell(4).value).toBe(0.5); // 1 of 2 done
+    expect(marketing.getCell(9).value).toBe(0.725);
+    expect(rows.map((r) => r.getCell(1).value)).toContain('TOTAL EMPRESA');
+  });
+
+  it('POST /export/excel honors the area filter and rejects other workspaces and hidden areas', async () => {
+    const { week } = await prepareLastWeek();
+    const post = (token: string, body: object) =>
+      app.request('/api/v1/dashboard/export/excel', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    const res = await post(s.admin.token, { weekId: week.id, areaId: s.marketing, format: 'xlsx' });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-disposition')).toContain(`_Week${week.weekNumber}_Marketing.xlsx`);
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(await res.arrayBuffer());
+    const summary = wb.getWorksheet('Resumen')!;
+    expect(String(summary.getCell('A2').value)).toContain('Área: Marketing');
+    expect(summary.getRows(5, 5)!.map((r) => r.getCell(1).value).filter(Boolean)).toEqual(['Marketing']);
+    expect(wb.getWorksheet('Tareas')!.getRows(5, 5)!.map((r) => r.getCell(1).value).filter(Boolean)).toEqual(['Marketing', 'Marketing']);
+
+    expect((await post(s.admin.token, { workspaceId: crypto.randomUUID() })).status).toBe(404);
+    expect((await post(s.fin.user.token, { areaId: s.marketing })).status).toBe(404);
+    expect((await post(s.admin.token, { weekId: crypto.randomUUID() })).status).toBe(404);
+    expect((await post(s.admin.token, { format: 'csv' })).status).toBe(422);
+  });
+
+  it('history returns the last closed weeks plus the current one, in percentages', async () => {
+    const { week } = await prepareLastWeek();
+    await call('POST', `/api/v1/weeks/${week.id}/close`, { token: s.admin.token, body: { force: true } });
+    const res = await call('GET', '/api/v1/dashboard/week/history?limit=3', { token: s.admin.token });
+    expect(res.status).toBe(200);
+    expect(res.body.weeks.map((w: { mondayDate: string; status: string }) => [w.mondayDate, w.status])).toEqual([
+      [lastMonday(), 'ARCHIVED'],
+      [thisMonday(), 'ACTIVE'],
+    ]);
+    const [closed] = res.body.weeks;
+    expect(closed.metrics).toMatchObject({ indexGeneral: 36.3, totalTasks: 3, completedTasks: 1, delayedTasks: 2, compliancePercentage: 33.3 });
+    const mkt = closed.departmentMetrics.find((d: { departmentName: string }) => d.departmentName === 'Marketing');
+    expect(mkt).toMatchObject({ tasksTotal: 2, tasksCompleted: 1, tasksDelayed: 1, kpiIndex: 72.5, semaphore: 'YELLOW' });
+
+    const area = await call('GET', `/api/v1/dashboard/week/history?departmentId=${s.marketing}&includeCurrent=false`, { token: s.admin.token });
+    expect(area.body.weeks).toHaveLength(1);
+    expect(area.body.weeks[0].metrics).toMatchObject({ indexGeneral: 72.5, totalTasks: 2, compliancePercentage: 50 });
+    expect((await call('GET', `/api/v1/dashboard/week/history?departmentId=${s.marketing}`, { token: s.fin.user.token })).status).toBe(404);
   });
 });
 

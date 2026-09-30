@@ -1,4 +1,3 @@
-import ExcelJS from 'exceljs';
 import { notFound } from '../../lib/errors';
 import { canSeeDepartment, departmentScope } from '../../lib/permissions';
 import { prisma } from '../../lib/prisma';
@@ -101,198 +100,97 @@ export async function departmentWeek(user: AuthUser, departmentId: string, weekR
   return { week: { ...data.week, archivedAt: week.archivedAt }, today: data.today, department };
 }
 
+async function assertVisibleArea(user: AuthUser, departmentId: string | undefined) {
+  if (!departmentId) return;
+  const scope = await departmentScope(user);
+  if (!canSeeDepartment(scope, departmentId)) throw notFound('Department');
+}
+
 // The index week by week, oldest first, ending with the current week.
 export async function trends(user: AuthUser, count: number, departmentId?: string) {
+  await assertVisibleArea(user, departmentId);
   const current = await currentWeek(user.workspaceId, user.workspaceTimezone);
   const weeks = await prisma.week.findMany({
     where: { workspaceId: user.workspaceId, mondayDate: { lte: current.mondayDate } },
     orderBy: { mondayDate: 'desc' },
     take: count,
   });
-  const scope = departmentId ? await departmentScope(user) : null;
-  if (departmentId && !canSeeDepartment(scope!, departmentId)) throw notFound('Department');
 
-  const points: any[] = [];
+  const points = [];
   for (const week of weeks.reverse()) {
     const data = await weekData(user, week);
     const departments = data.departments.filter((d) => !departmentId || d.id === departmentId);
-    const focus = departmentId ? departments[0]?.metrics : null;
+    const focus = departmentId ? (departments[0]?.metrics ?? null) : null;
+    const source = focus ?? data.overall;
     points.push({
       week: presentWeek(week),
-      index: focus ? focus.index : data.overall.index,
-      taskProgress: focus ? focus.taskProgress : data.overall.taskProgress,
-      kpiCompliance: focus ? focus.kpiCompliance : data.overall.kpiCompliance,
-      functionCompliance: focus ? focus.functionCompliance : data.overall.functionCompliance,
-      semaphore: focus ? focus.semaphore : data.overall.semaphore,
-      departments: departments.map((d: any) => ({ id: d.id, name: d.name, index: d.metrics.index, semaphore: d.metrics.semaphore })),
+      index: source.index,
+      taskProgress: source.taskProgress,
+      kpiCompliance: source.kpiCompliance,
+      functionCompliance: source.functionCompliance,
+      semaphore: source.semaphore,
+      departments: departments.map((d) => ({ id: d.id, name: d.name, index: d.metrics.index, semaphore: d.metrics.semaphore })),
     });
   }
   return { data: points };
 }
 
-// ─── Excel export ───────────────────────────────────────────────────────────
+// ─── History (the four dashboard charts) ────────────────────────────────────
 
-const SEMAPHORE_ES: Record<string, string> = { GREEN: 'Verde', YELLOW: 'Amarillo', RED: 'Rojo', GRAY: 'Gris' };
-const FULFILLED_ES: Record<string, string> = { YES: 'Sí', PARTIAL: 'Parcial', NO: 'No', NOT_APPLICABLE: 'No aplica' };
-const FILL: Record<string, string> = { GREEN: 'FFDCFCE7', YELLOW: 'FFFEF9C3', RED: 'FFFEE2E2', GRAY: 'FFF1F5F9' };
-const pct = (v: number | null) => (v === null ? null : v);
+// Percentages 0–100 with one decimal, as the charts plot them.
+const percent = (fraction: number | null) => (fraction === null ? null : Math.round(fraction * 1000) / 10);
 
-function styleHeader(sheet: ExcelJS.Worksheet) {
-  const header = sheet.getRow(1);
-  header.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-  header.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F2A44' } };
-  sheet.views = [{ state: 'frozen', ySplit: 1 }];
-}
-
-function paint(cell: ExcelJS.Cell, semaphore: string | null) {
-  if (semaphore && FILL[semaphore]) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: FILL[semaphore] } };
-}
-
-export async function exportWeekExcel(user: AuthUser, weekRef: string | undefined) {
-  const { data } = await scopedWeekData(user, weekRef);
-  const wb = new ExcelJS.Workbook();
-  wb.creator = 'Central Partner';
-  wb.created = new Date();
-  const label = `Semana ${data.week.weekNumber} (${data.week.mondayDate} al ${data.week.saturdayDate})`;
-
-  const summary = wb.addWorksheet('Resumen');
-  summary.columns = [
-    { header: 'Área', key: 'name', width: 24 },
-    { header: 'Jefe', key: 'head', width: 22 },
-    { header: 'Tareas', key: 'total', width: 9 },
-    { header: 'Cumplidas', key: 'done', width: 11 },
-    { header: 'Atrasadas', key: 'overdue', width: 11 },
-    { header: 'Bloqueadas', key: 'blocked', width: 11 },
-    { header: '① Avance', key: 'taskProgress', width: 11, style: { numFmt: '0.0%' } },
-    { header: '② KPIs', key: 'kpiCompliance', width: 10, style: { numFmt: '0.0%' } },
-    { header: '③ Funciones', key: 'functionCompliance', width: 12, style: { numFmt: '0.0%' } },
-    { header: 'Índice', key: 'index', width: 10, style: { numFmt: '0.0%' } },
-    { header: 'Semáforo', key: 'semaphore', width: 11 },
-    { header: 'KPIs registrados', key: 'kpis', width: 16 },
-    { header: 'Funciones marcadas', key: 'functions', width: 18 },
-  ];
-  for (const d of data.departments) {
-    const m = d.metrics;
-    const row = summary.addRow({
-      name: d.name,
-      head: d.head?.displayName ?? '—',
-      total: m.tasks.total,
-      done: m.tasks.done,
-      overdue: m.tasks.overdue,
-      blocked: m.tasks.blocked,
-      taskProgress: pct(m.taskProgress),
-      kpiCompliance: pct(m.kpiCompliance),
-      functionCompliance: pct(m.functionCompliance),
-      index: pct(m.index),
-      semaphore: m.semaphore ? SEMAPHORE_ES[m.semaphore] : '—',
-      kpis: `${m.kpis.recorded}/${m.kpis.total}`,
-      functions: `${m.functions.marked}/${m.functions.total}`,
-    });
-    paint(row.getCell('semaphore'), m.semaphore);
-  }
-  const o = data.overall;
-  const total = summary.addRow({
-    name: 'TOTAL EMPRESA',
-    total: o.tasks.total,
-    done: o.tasks.done,
-    overdue: o.tasks.overdue,
-    blocked: o.tasks.blocked,
-    taskProgress: pct(o.taskProgress),
-    kpiCompliance: pct(o.kpiCompliance),
-    functionCompliance: pct(o.functionCompliance),
-    index: pct(o.index),
-    semaphore: o.semaphore ? SEMAPHORE_ES[o.semaphore] : '—',
+// The last `limit` closed weeks (from their frozen archives) plus, by default,
+// the current one — oldest first. With `departmentId`, every number is that area's.
+//   compliancePercentage = completed ÷ total tasks of the week
+export async function weekHistory(user: AuthUser, opts: { limit: number; includeCurrent: boolean; departmentId?: string }) {
+  await assertVisibleArea(user, opts.departmentId);
+  const current = await currentWeek(user.workspaceId, user.workspaceTimezone);
+  const closed = await prisma.week.findMany({
+    where: { workspaceId: user.workspaceId, status: 'ARCHIVED', mondayDate: { lt: current.mondayDate } },
+    orderBy: { mondayDate: 'desc' },
+    take: opts.limit,
   });
-  total.font = { bold: true };
-  paint(total.getCell('semaphore'), o.semaphore);
-  styleHeader(summary);
-  summary.addRow([]);
-  summary.addRow([label]).font = { italic: true, color: { argb: 'FF7A8092' } };
+  const weeks = [...closed.reverse(), ...(opts.includeCurrent ? [current] : [])];
 
-  const tasks = wb.addWorksheet('Tareas');
-  tasks.columns = [
-    { header: 'Área', key: 'area', width: 20 },
-    { header: 'Día', key: 'day', width: 12 },
-    { header: 'Tarea', key: 'title', width: 44 },
-    { header: 'Responsable', key: 'assignee', width: 22 },
-    { header: '% Avance', key: 'progress', width: 10, style: { numFmt: '0%' } },
-    { header: 'Estado', key: 'semaphore', width: 11 },
-    { header: 'Viene de', key: 'carried', width: 11 },
-    { header: 'Observación', key: 'observation', width: 40 },
-  ];
-  for (const d of data.departments) {
-    for (const t of d.tasks) {
-      const row = tasks.addRow({
-        area: d.name,
-        day: t.day ?? '',
-        title: t.title,
-        assignee: t.assignedTo?.displayName ?? 'Sin asignar',
-        progress: t.progress / 100,
-        semaphore: SEMAPHORE_ES[t.semaphore],
-        carried: t.carriedFrom ? `Sem. ${t.carriedFrom.weekNumber}` : '',
-        observation: t.observation ?? '',
-      });
-      paint(row.getCell('semaphore'), t.semaphore);
-    }
+  const result = [];
+  for (const week of weeks) {
+    const data = await weekData(user, week);
+    const departments = data.departments.filter((d) => !opts.departmentId || d.id === opts.departmentId);
+    const focus = opts.departmentId ? (departments[0]?.metrics ?? null) : null;
+    const source = focus ?? data.overall;
+    const tasks = focus ? focus.tasks : data.overall.tasks;
+    result.push({
+      weekId: week.id,
+      weekNumber: week.weekNumber,
+      year: week.year,
+      mondayDate: data.week.mondayDate,
+      saturdayDate: data.week.saturdayDate,
+      status: week.status,
+      metrics: {
+        indexGeneral: percent(source.index),
+        totalTasks: tasks.total,
+        completedTasks: tasks.done,
+        delayedTasks: tasks.overdue,
+        compliancePercentage: tasks.total ? Math.round((tasks.done / tasks.total) * 1000) / 10 : null,
+        taskProgress: percent(source.taskProgress),
+        kpiCompliance: percent(source.kpiCompliance),
+        functionCompliance: percent(source.functionCompliance),
+        semaphore: source.semaphore,
+      },
+      departmentMetrics: departments.map((d) => ({
+        departmentId: d.id,
+        departmentName: d.name,
+        tasksTotal: d.metrics.tasks.total,
+        tasksCompleted: d.metrics.tasks.done,
+        tasksDelayed: d.metrics.tasks.overdue,
+        kpiIndex: percent(d.metrics.index),
+        semaphore: d.metrics.semaphore,
+      })),
+    });
   }
-  styleHeader(tasks);
-
-  const kpis = wb.addWorksheet('KPIs');
-  kpis.columns = [
-    { header: 'Área', key: 'area', width: 20 },
-    { header: 'KPI', key: 'title', width: 36 },
-    { header: 'Tipo', key: 'type', width: 14 },
-    { header: 'Meta', key: 'target', width: 12 },
-    { header: 'Real', key: 'actual', width: 12 },
-    { header: 'Unidad', key: 'unit', width: 10 },
-    { header: 'Menos es mejor', key: 'lesser', width: 15 },
-    { header: '% Cumplimiento', key: 'completion', width: 15, style: { numFmt: '0.0%' } },
-    { header: 'Semáforo', key: 'semaphore', width: 11 },
-    { header: 'Tendencia', key: 'trend', width: 11 },
-  ];
-  const TYPE_ES: Record<string, string> = { RESULT: 'Resultado', COMPLIANCE: 'Cumplimiento', PROGRESS: 'Avance' };
-  const TREND_ES: Record<string, string> = { UP: '↑', DOWN: '↓', STABLE: '=' };
-  for (const d of data.departments) {
-    for (const k of d.kpis) {
-      const row = kpis.addRow({
-        area: d.name,
-        title: k.title,
-        type: TYPE_ES[k.type] ?? k.type,
-        target: k.target,
-        actual: k.actual,
-        unit: k.unit ?? '',
-        lesser: k.lesserIsBetter ? 'Sí' : 'No',
-        completion: k.completion,
-        semaphore: k.semaphore ? SEMAPHORE_ES[k.semaphore] : '—',
-        trend: k.trend ? TREND_ES[k.trend] : '',
-      });
-      paint(row.getCell('semaphore'), k.semaphore);
-    }
-  }
-  styleHeader(kpis);
-
-  const functions = wb.addWorksheet('Funciones');
-  functions.columns = [
-    { header: 'Área', key: 'area', width: 20 },
-    { header: 'Función', key: 'title', width: 40 },
-    { header: 'Frecuencia', key: 'frequency', width: 14 },
-    { header: '¿Cumplió?', key: 'fulfilled', width: 12 },
-    { header: 'Observación', key: 'observation', width: 40 },
-  ];
-  const FREQ_ES: Record<string, string> = { DAILY: 'Diaria', WEEKLY: 'Semanal', MONTHLY: 'Mensual', WHEN_OCCURS: 'Cuando ocurra', WHEN_CHANGES: 'Cuando cambie' };
-  for (const d of data.departments) {
-    for (const f of d.functions) {
-      functions.addRow({
-        area: d.name,
-        title: f.title,
-        frequency: FREQ_ES[f.frequency] ?? f.frequency,
-        fulfilled: f.fulfilled ? FULFILLED_ES[f.fulfilled] : '—',
-        observation: f.observation ?? '',
-      });
-    }
-  }
-  styleHeader(functions);
-
-  const buffer = new Uint8Array(await wb.xlsx.writeBuffer());
-  return { buffer, filename: `central-partner-semana-${data.week.year}-${String(data.week.weekNumber).padStart(2, '0')}.xlsx` };
+  return { weeks: result };
 }
+
+// Shared with the Excel export.
+export { assertVisibleArea, scopedWeekData };

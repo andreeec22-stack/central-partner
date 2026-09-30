@@ -46,15 +46,18 @@ export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputE
   },
 );
 
-export function Select({ className, invalid, ...rest }: SelectHTMLAttributes<HTMLSelectElement> & { invalid?: boolean }) {
-  return (
-    <select
-      aria-invalid={invalid || undefined}
-      className={clsx(control, 'h-10 pr-8', invalid ? 'border-sem-red' : 'border-line-strong', className)}
-      {...rest}
-    />
-  );
-}
+export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSelectElement> & { invalid?: boolean }>(
+  function Select({ className, invalid, ...rest }, ref) {
+    return (
+      <select
+        ref={ref}
+        aria-invalid={invalid || undefined}
+        className={clsx(control, 'h-10 pr-8', invalid ? 'border-sem-red' : 'border-line-strong', className)}
+        {...rest}
+      />
+    );
+  },
+);
 
 export function Textarea({ className, invalid, ...rest }: TextareaHTMLAttributes<HTMLTextAreaElement> & { invalid?: boolean }) {
   return (

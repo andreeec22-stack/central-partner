@@ -1,16 +1,17 @@
 import type { Prisma, Semaphore, TaskStatus } from '@prisma/client';
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { z } from 'zod';
-import { forbidden } from '../../lib/errors';
+import { forbidden, notFound } from '../../lib/errors';
 import { contentDisposition } from '../../lib/storage';
 import { dateToDay, localDay } from '../../lib/week';
 import { taskSemaphore } from '../../lib/weekly-metrics';
 import { canSeeDepartment, departmentFilter, departmentScope } from '../../lib/permissions';
 import { prisma } from '../../lib/prisma';
-import { idParam, parseQuery } from '../../lib/validation';
+import { idParam, parseJson, parseQuery } from '../../lib/validation';
 import { requireAuth } from '../../middleware/auth';
 import type { AppEnv, AuthUser } from '../../types';
-import { departmentWeek, exportWeekExcel, trends, weekDashboard } from './weekly-dashboard.service';
+import { exportDashboardExcel } from './export';
+import { departmentWeek, trends, weekDashboard, weekHistory } from './weekly-dashboard.service';
 
 const querySchema = z.object({ departmentId: z.string().uuid().optional() });
 
@@ -109,6 +110,26 @@ async function buildDashboard(user: AuthUser, departmentId?: string) {
   };
 }
 
+const weekRefSchema = z.union([z.literal('current'), z.string().uuid()]);
+const historySchema = querySchema.extend({
+  limit: z.coerce.number().int().min(1).max(12).default(3),
+  includeCurrent: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
+});
+const exportSchema = z.object({
+  workspaceId: z.string().uuid().optional(),
+  weekId: weekRefSchema.default('current'),
+  areaId: z.string().uuid().optional(),
+  format: z.literal('xlsx').default('xlsx'),
+});
+
+function excelResponse(c: Context<AppEnv>, file: { buffer: Uint8Array<ArrayBuffer>; filename: string }) {
+  return c.body(file.buffer, 200, {
+    'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'Content-Disposition': contentDisposition('attachment', file.filename),
+    'Cache-Control': 'no-store',
+  });
+}
+
 const weekRef = (c: Parameters<typeof idParam>[0]) => (c.req.param('weekId') === 'current' ? 'current' : idParam(c, 'weekId', 'Week'));
 
 export const dashboardRoutes = new Hono<AppEnv>()
@@ -117,7 +138,12 @@ export const dashboardRoutes = new Hono<AppEnv>()
     const { departmentId } = parseQuery(c, querySchema);
     return c.json(await buildDashboard(c.get('user'), departmentId));
   })
-  // Weekly cycle. :weekId accepts "current".
+  // Weekly cycle. Registered before '/week/:weekId' so "history" isn't read as an id.
+  .get('/week/history', async (c) => {
+    const q = parseQuery(c, historySchema);
+    return c.json(await weekHistory(c.get('user'), { limit: q.limit, includeCurrent: q.includeCurrent, departmentId: q.departmentId }));
+  })
+  // :weekId accepts "current".
   .get('/week/:weekId', async (c) => {
     const { departmentId } = parseQuery(c, querySchema);
     return c.json(await weekDashboard(c.get('user'), weekRef(c), departmentId));
@@ -130,11 +156,14 @@ export const dashboardRoutes = new Hono<AppEnv>()
     return c.json(await trends(c.get('user'), q.weeks, q.departmentId));
   })
   .get('/export/excel', async (c) => {
-    const { weekId } = parseQuery(c, z.object({ weekId: z.union([z.literal('current'), z.string().uuid()]).default('current') }));
-    const { buffer, filename } = await exportWeekExcel(c.get('user'), weekId);
-    return c.body(buffer, 200, {
-      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'Content-Disposition': contentDisposition('attachment', filename),
-      'Cache-Control': 'no-store',
-    });
+    const q = parseQuery(c, z.object({ weekId: weekRefSchema.default('current'), departmentId: z.string().uuid().optional() }));
+    return excelResponse(c, await exportDashboardExcel(c.get('user'), q.weekId, q.departmentId));
+  })
+  // Same file, with the dashboard's current filters in the body.
+  .post('/export/excel', async (c) => {
+    const user = c.get('user');
+    const body = await parseJson(c, exportSchema);
+    // The token already scopes the workspace; a different id in the body is simply not found.
+    if (body.workspaceId && body.workspaceId !== user.workspaceId) throw notFound('Workspace');
+    return excelResponse(c, await exportDashboardExcel(user, body.weekId, body.areaId));
   });

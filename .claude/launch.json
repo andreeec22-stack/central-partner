@@ -4,14 +4,57 @@
     {
       "name": "api",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "-w", "@central-partner/api"],
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "-w",
+        "@central-partner/api"
+      ],
       "port": 3000
     },
     {
       "name": "web",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "-w", "@central-partner/web"],
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "-w",
+        "@central-partner/web"
+      ],
       "port": 5173
+    },
+    {
+      "name": "api-demo-db",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "-w",
+        "@central-partner/api"
+      ],
+      "env": {
+        "DATABASE_URL": "postgresql://central:central@localhost:5432/central_partner_test",
+        "PORT": "3001",
+        "CORS_ORIGIN": "http://localhost:5175"
+      },
+      "port": 3001
+    },
+    {
+      "name": "web-demo-db",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "-w",
+        "@central-partner/web",
+        "--",
+        "--port",
+        "5175"
+      ],
+      "env": {
+        "VITE_DEV_API_PROXY": "http://localhost:3001"
+      },
+      "port": 5175
     }
   ]
 }

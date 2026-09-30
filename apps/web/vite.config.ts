@@ -20,5 +20,8 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
     css: false,
+    // jsdom + Recharts per worker is memory-hungry; unbounded parallel forks
+    // were killed by the OS (exit 134) on a dev laptop.
+    maxWorkers: 2,
   },
 });

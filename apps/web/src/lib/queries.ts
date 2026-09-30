@@ -16,7 +16,7 @@ import type {
   TaskDetail,
   TaskFile,
   TaskStatus,
-  TrendPoint,
+  HistoryWeek,
   UserSummary,
   WeekDashboard,
 } from './types';
@@ -202,14 +202,20 @@ export function useWeekDashboard(weekRef = 'current', departmentId?: string) {
   return useQuery({
     queryKey: keys.dashboard(`${weekRef}:${departmentId ?? 'all'}`),
     queryFn: ({ signal }) => api<WeekDashboard>(`/dashboard/week/${weekRef}`, { signal, query: { departmentId } }),
+    // Changing a filter keeps the previous numbers (dimmed) instead of flashing skeletons.
+    placeholderData: keepPreviousData,
   });
 }
 
-export function useTrends(weeks = 4, departmentId?: string) {
-  return useQuery({
-    queryKey: ['dashboard', 'trends', weeks, departmentId ?? 'all'] as const,
+// Last 3 closed weeks + the current one, oldest first. Past weeks are frozen,
+// so this is cached longer; socket events still invalidate it.
+export function useWeekHistory(departmentId?: string) {
+  return useQuery<HistoryWeek[]>({
+    queryKey: ['dashboard', 'history', departmentId ?? 'all'] as const,
     queryFn: ({ signal }) =>
-      api<{ data: TrendPoint[] }>('/dashboard/trends', { signal, query: { weeks, departmentId } }).then((r) => r.data),
+      api<{ weeks: HistoryWeek[] }>('/dashboard/week/history', { signal, query: { limit: 3, departmentId } }).then((r) => r.weeks),
+    staleTime: 5 * 60_000,
+    placeholderData: keepPreviousData,
   });
 }
 

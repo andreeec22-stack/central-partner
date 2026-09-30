@@ -110,7 +110,8 @@ function buildUrl(path: string, query?: RequestOptions['query']) {
   return qs ? `${url}?${qs}` : url;
 }
 
-export async function api<T>(path: string, opts: RequestOptions = {}): Promise<T> {
+// Sends the request with the access token; on a 401 refreshes once and retries.
+async function request(path: string, opts: RequestOptions): Promise<Response> {
   // FormData goes as-is: the browser sets the multipart boundary itself.
   const isForm = opts.body instanceof FormData;
   const send = (token: string | null) =>
@@ -135,8 +136,39 @@ export async function api<T>(path: string, opts: RequestOptions = {}): Promise<T
     res = await send(token);
   }
   if (!res.ok) throw await parseError(res);
+  return res;
+}
+
+export async function api<T>(path: string, opts: RequestOptions = {}): Promise<T> {
+  const res = await request(path, opts);
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+// The filename from Content-Disposition (RFC 6266: prefers filename*=UTF-8'').
+export function filenameFrom(disposition: string | null, fallback: string): string {
+  if (!disposition) return fallback;
+  const star = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (star) return decodeURIComponent(star[1]!);
+  return disposition.match(/filename="([^"]+)"/i)?.[1] ?? fallback;
+}
+
+// A file from an authenticated endpoint (the browser can't add the bearer token to a plain link).
+export async function download(path: string, opts: RequestOptions & { fallbackName: string }): Promise<{ blob: Blob; filename: string }> {
+  const res = await request(path, opts);
+  return { blob: await res.blob(), filename: filenameFrom(res.headers.get('content-disposition'), opts.fallbackName) };
+}
+
+// Hands a blob to the browser as a download.
+export function saveBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 // Multipart upload of a single file in the field the API expects ("file").

@@ -138,13 +138,34 @@ export interface WeekDashboard {
   generatedAt: string;
 }
 
-export interface TrendPoint {
-  week: WeekSummary;
-  index: number | null;
-  taskProgress: number | null;
-  kpiCompliance: number | null;
-  functionCompliance: number | null;
-  semaphore: AreaSemaphore | null;
+// GET /dashboard/week/history — percentages 0–100.
+export interface HistoryWeek {
+  weekId: string;
+  weekNumber: number;
+  year: number;
+  mondayDate: string;
+  saturdayDate: string;
+  status: 'ACTIVE' | 'ARCHIVED';
+  metrics: {
+    indexGeneral: number | null;
+    totalTasks: number;
+    completedTasks: number;
+    delayedTasks: number;
+    compliancePercentage: number | null;
+    taskProgress: number | null;
+    kpiCompliance: number | null;
+    functionCompliance: number | null;
+    semaphore: AreaSemaphore | null;
+  };
+  departmentMetrics: {
+    departmentId: string;
+    departmentName: string;
+    tasksTotal: number;
+    tasksCompleted: number;
+    tasksDelayed: number;
+    kpiIndex: number | null;
+    semaphore: AreaSemaphore | null;
+  }[];
 }
 
 export interface AuthPayload {
