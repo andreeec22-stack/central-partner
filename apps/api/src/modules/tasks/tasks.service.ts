@@ -135,8 +135,8 @@ async function assertParent(ctx: OpContext, taskId: string | null, parentId: str
     where: { workspaceId: ctx.user.workspaceId, parentTaskId: { not: null } },
     select: { id: true, parentTaskId: true },
   });
-  const parentOf = new Map(links.map((l) => [l.id, l.parentTaskId]));
-  if (createsParentCycle(taskId, parentId, (id) => parentOf.get(id))) {
+  const parentOf = new Map((links as any).map((l: any) => [l.id, l.parentTaskId] as [string, string | null]));
+  if (createsParentCycle(taskId, parentId, (id) => (parentOf.get(id) as string | null | undefined))) {
     throw validationError('A task cannot be nested under itself or one of its sub-tasks', [
       { field: 'parentTaskId', message: 'circular' },
     ]);
@@ -505,12 +505,12 @@ export async function bulkUpdateTasks(user: AuthUser, input: BulkUpdateInput, ct
         where: { id: { in: input.taskIds }, workspaceId: user.workspaceId, deletedAt: null, departmentId: departmentFilter(scope) },
         include: { week: { select: { status: true } } },
       });
-      const byId = new Map(tasks.map((t) => [t.id, t]));
+      const byId = new Map(tasks.map((t: any) => [t.id, t]));
       const failed: { taskId: string; code: string; reason: string }[] = [];
       const plans: { task: Task; plan: UpdatePlan }[] = [];
 
       for (const taskId of input.taskIds) {
-        const task = byId.get(taskId);
+        const task = byId.get(taskId) as any;
         if (!task) {
           failed.push({ taskId, code: 'NOT_FOUND', reason: 'Task not found' });
           continue;

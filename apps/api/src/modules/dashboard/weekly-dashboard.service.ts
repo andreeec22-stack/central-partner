@@ -112,7 +112,7 @@ export async function trends(user: AuthUser, count: number, departmentId?: strin
   const scope = departmentId ? await departmentScope(user) : null;
   if (departmentId && !canSeeDepartment(scope!, departmentId)) throw notFound('Department');
 
-  const points = [];
+  const points: any[] = [];
   for (const week of weeks.reverse()) {
     const data = await weekData(user, week);
     const departments = data.departments.filter((d) => !departmentId || d.id === departmentId);
@@ -124,7 +124,7 @@ export async function trends(user: AuthUser, count: number, departmentId?: strin
       kpiCompliance: focus ? focus.kpiCompliance : data.overall.kpiCompliance,
       functionCompliance: focus ? focus.functionCompliance : data.overall.functionCompliance,
       semaphore: focus ? focus.semaphore : data.overall.semaphore,
-      departments: departments.map((d) => ({ id: d.id, name: d.name, index: d.metrics.index, semaphore: d.metrics.semaphore })),
+      departments: departments.map((d: any) => ({ id: d.id, name: d.name, index: d.metrics.index, semaphore: d.metrics.semaphore })),
     });
   }
   return { data: points };

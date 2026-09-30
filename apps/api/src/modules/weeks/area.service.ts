@@ -193,7 +193,7 @@ export async function kpiTemplates(user: AuthUser) {
     select: { departmentId: true, title: true, description: true, type: true, unit: true, target: true, lesserIsBetter: true },
   });
   const seen = new Set<string>();
-  const data = [];
+  const data: any[] = [];
   for (const r of rows) {
     const key = `${r.departmentId}:${r.title.trim().toLowerCase()}`;
     if (seen.has(key)) continue;

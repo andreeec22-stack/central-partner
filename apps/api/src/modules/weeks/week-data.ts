@@ -199,7 +199,7 @@ export async function buildWeekData(
           order: k.order,
           completion: completion === null ? null : round4(completion),
           semaphore: completion === null ? null : semaphoreFor(completion * 100),
-          trend: trendOf(completion, previousCompletion.get(`${d.id}:${normalize(k.title)}`) ?? null),
+          trend: trendOf(completion, previousCompletion.get(`${d.id}:${normalize(k.title)}`) as number | null ?? null),
           recordedAt: k.recordedAt,
         };
       }),

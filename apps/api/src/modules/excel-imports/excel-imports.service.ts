@@ -167,10 +167,10 @@ const titleKey = (departmentId: string, title: string) => `${departmentId}:${tit
 
 export async function confirmImport(user: AuthUser, id: string, input: ConfirmImportInput, ctx: ClientContext) {
   const { departments, users } = await referenceData(user.workspaceId);
-  const deptById = new Map(departments.map((d) => [d.id, d]));
-  const userById = new Map(users.map((u) => [u.id, u]));
+  const deptById = new Map((departments as any).map((d: any) => [d.id, d]));
+  const userById = new Map(users.map((u: any) => [u.id, u]));
   const validAssignee = (userId: string, departmentId: string) => {
-    const u = userById.get(userId);
+    const u = userById.get(userId) as any;
     return !!u && (u.role === 'ADMIN' || u.departmentId === departmentId);
   };
 
@@ -204,7 +204,7 @@ export async function confirmImport(user: AuthUser, id: string, input: ConfirmIm
           skipped.push({ rowIndex: m.rowIndex, reason: 'Row not found in this import' });
           continue;
         }
-        const dept = deptById.get(m.departmentId);
+        const dept = deptById.get(m.departmentId) as any;
         if (!dept) {
           skipped.push({ rowIndex: m.rowIndex, reason: 'No department found' });
           continue;
