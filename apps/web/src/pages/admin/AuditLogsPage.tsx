@@ -37,6 +37,18 @@ const ACTION_GROUPS: { label: string; actions: [string, string][] }[] = [
     ],
   },
   {
+    label: 'Desempeño',
+    actions: [
+      ['SURVEY_TEMPLATE_CREATED', 'Creó plantilla de encuesta'],
+      ['SURVEY_CREATED', 'Creó evaluación'],
+      ['SURVEY_CREATED_WITHOUT_PRODUCTIVITY', 'Evaluación sin índice de productividad'],
+      ['SURVEY_SUBMITTED', 'Envió evaluación'],
+      ['SURVEY_RESPONSES_CORRECTED', 'Corrigió respuestas de evaluación'],
+      ['SURVEY_CANCELLED', 'Canceló evaluación'],
+      ['PERFORMANCE_REVIEW_PUBLISHED', 'Publicó resultado de desempeño'],
+    ],
+  },
+  {
     label: 'Usuarios y accesos',
     actions: [
       ['USER_INVITED', 'Invitó usuario'],

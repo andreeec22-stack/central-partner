@@ -78,6 +78,9 @@ export function useRealtime(): ConnectionState {
       toast.info(notification.title);
       invalidate('notifications');
     });
+    // Surveys and reviews: lists, dashboard and the open survey refetch.
+    socket.on('survey:changed', () => invalidate('surveys', 'reviews'));
+    socket.on('review:changed', () => invalidate('reviews', 'surveys'));
     socket.on('permissions:updated', () => {
       void useAuth.getState().refreshMe();
       invalidate('tasks', 'dashboard', 'departments', 'users');

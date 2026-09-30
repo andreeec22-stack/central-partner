@@ -8,6 +8,10 @@ import { Prisma, PrismaClient, type FunctionFrequency, type FunctionFulfillment,
 import bcrypt from 'bcryptjs';
 import { addDays, dayToDate, isoWeek, localDay, mondayOf, saturdayOf } from '../src/lib/week';
 import { buildWeekData } from '../src/modules/weeks/week-data';
+import { prisma as appPrisma } from '../src/lib/prisma';
+import { getPerformanceMetrics } from '../src/modules/performance/performance.service';
+import { upsertPerformanceReview } from '../src/modules/surveys/reviews.service';
+import { calculateDualScore, calculatePerformanceScore, reviewPeriodOf } from '../src/modules/surveys/scoring';
 
 export const DEMO_PASSWORD = 'demo-12345';
 const SLUG = 'demo-central-partner';
@@ -297,6 +301,89 @@ async function main() {
     if (carried) await prisma.task.update({ where: { id: carried.id }, data: { weekId: current.id, carriedFromWeekId: lastClosed.id } });
   }
 
+  // Performance surveys: one active template. Community's quarter is already
+  // evaluated and published (Luis); Marketing's evaluations are open (Ana has a
+  // draft); Carla's self-assessment opens in two days.
+  const template = await prisma.surveyTemplate.create({
+    data: {
+      workspaceId: ws.id,
+      name: 'Evaluación trimestral de desempeño',
+      description: 'Autoevaluación y evaluación del jefe al cierre de cada trimestre.',
+      status: 'ACTIVE',
+      createdById: director.id,
+      questions: {
+        create: [
+          { questionNumber: 1, text: 'Calidad y precisión del trabajo entregado', questionType: 'LIKERT_5' },
+          { questionNumber: 2, text: 'Cumplimiento de plazos', questionType: 'LIKERT_5' },
+          { questionNumber: 3, text: 'Colaboración con el equipo y otras áreas', questionType: 'LIKERT_7' },
+          { questionNumber: 4, text: 'Porcentaje de objetivos del trimestre alcanzados (0–100)', questionType: 'NUMERIC', weight: 2 },
+          { questionNumber: 5, text: 'Ordena tus prioridades de desarrollo', questionType: 'RANKING', required: false, options: ['Liderazgo', 'Técnica', 'Comunicación', 'Gestión del tiempo'] },
+          { questionNumber: 6, text: 'Logros más importantes del trimestre', questionType: 'TEXT' },
+        ],
+      },
+    },
+    include: { questions: { orderBy: { questionNumber: 'asc' } } },
+  });
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  // The quarter being evaluated (the API defaults to the quarter of startDate).
+  const period = reviewPeriodOf(localDay(now, TZ));
+  type Answer = number | string | string[] | null;
+  const evaluation = async (
+    type: 'SELF_ASSESSMENT' | 'MANAGER_REVIEW',
+    evaluated: { id: string; displayName: string; departmentId: string | null },
+    evaluatorId: string,
+    answers: Answer[],
+    opts: { submit?: boolean; startsInDays?: number } = {},
+  ) => {
+    const report = await getPerformanceMetrics(evaluated.id, ws.id, TZ, 4, now);
+    const given = template.questions.map((q, i) => ({ questionId: q.id, value: answers[i] ?? null })).filter((a) => a.value !== null);
+    const performanceScore = opts.submit ? calculatePerformanceScore(template.questions, given) : null;
+    const startDate = new Date(now.getTime() + (opts.startsInDays ?? -5) * DAY_MS);
+    await prisma.survey.create({
+      data: {
+        workspaceId: ws.id,
+        templateId: template.id,
+        type,
+        title: `${type === 'SELF_ASSESSMENT' ? 'Autoevaluación' : 'Evaluación del jefe'} · ${evaluated.displayName} · ${period}`,
+        evaluatorId,
+        evaluatedUserId: evaluated.id,
+        departmentId: evaluated.departmentId!,
+        createdById: director.id,
+        startDate,
+        endDate: new Date(now.getTime() + 12 * DAY_MS),
+        status: opts.submit ? 'COMPLETED' : startDate > now ? 'SCHEDULED' : 'ACTIVE',
+        reviewPeriod: period,
+        totalQuestions: template.questions.length,
+        answeredQuestions: given.length,
+        completionPercentage: Math.round((given.length / template.questions.length) * 1000) / 10,
+        completedAt: opts.submit ? now : null,
+        productivityIndex: report.productivityIndex,
+        productivityData: report as unknown as Prisma.InputJsonValue,
+        performanceScore,
+        dualScore: opts.submit ? (calculateDualScore(report.productivityIndex, performanceScore) as unknown as Prisma.InputJsonValue) : undefined,
+        responses: { create: given.map((a) => ({ questionId: a.questionId, respondentId: evaluatorId, value: a.value as Prisma.InputJsonValue })) },
+      },
+    });
+  };
+  const priorities = ['Comunicación', 'Liderazgo', 'Gestión del tiempo', 'Técnica'];
+  await evaluation('SELF_ASSESSMENT', luis, luis.id, [5, 4, 6, 85, priorities, 'Duplicamos la respuesta a mensajes en menos de 2 horas.'], { submit: true });
+  await evaluation('MANAGER_REVIEW', luis, jefeCom.id, [4, 3, 6, 78, null, 'Muy buen trato con la comunidad; mejorar reportes a tiempo.'], { submit: true });
+  const review = await upsertPerformanceReview(ws.id, luis.id, period, prisma);
+  await prisma.performanceReview.update({
+    where: { id: review!.id },
+    data: {
+      managerComments: 'Trimestre sólido: la comunidad creció y el tono de marca se mantuvo.',
+      strengths: ['Empatía con la audiencia', 'Rapidez de respuesta'],
+      areasForImprovement: ['Entregar el reporte semanal a tiempo'],
+      developmentGoals: ['Curso de analítica de redes'],
+      publishedAt: now,
+      publishedById: jefeCom.id,
+    },
+  });
+  await evaluation('SELF_ASSESSMENT', ana, ana.id, [4, 3]);
+  await evaluation('MANAGER_REVIEW', ana, jefeMkt.id, []);
+  await evaluation('SELF_ASSESSMENT', carla, carla.id, [], { startsInDays: 2 });
+
   // So the Auditoría page starts with the workspace's origin.
   await prisma.activityLog.createMany({
     data: [
@@ -324,4 +411,4 @@ main()
     console.error(e);
     process.exit(1);
   })
-  .finally(() => prisma.$disconnect());
+  .finally(() => Promise.all([prisma.$disconnect(), appPrisma.$disconnect()]));

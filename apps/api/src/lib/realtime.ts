@@ -37,7 +37,9 @@ export type ServerEvent =
   | 'kpi:changed'
   | 'function:changed'
   | 'task:observation'
-  | 'permissions:updated';
+  | 'permissions:updated'
+  | 'survey:changed'
+  | 'review:changed';
 
 let io: Server | null = null;
 

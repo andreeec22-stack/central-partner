@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import { BookOpen, Building2, CalendarDays, FileSpreadsheet, History, LayoutDashboard, ListChecks, LogOut, Menu, Settings2, ShieldCheck, Users, X } from 'lucide-react';
+import { BookOpen, Building2, CalendarDays, ClipboardList, FileSpreadsheet, History, LayoutDashboard, ListChecks, LogOut, Menu, Settings2, ShieldCheck, TrendingUp, Users, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router';
 import { useWorkspaceBranding } from '../../lib/branding';
@@ -43,6 +43,11 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         <NavLink to="/tasks" className={navItem} onClick={onNavigate}>
           <ListChecks className="size-4" aria-hidden /> Tareas
         </NavLink>
+        {role && role !== 'VIEWER' && (
+          <NavLink to="/performance" className={navItem} onClick={onNavigate}>
+            <TrendingUp className="size-4" aria-hidden /> Desempeño
+          </NavLink>
+        )}
       </nav>
 
       {role === 'ADMIN' && (
@@ -65,6 +70,9 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
             <p className="px-3 pt-3 text-[11px] font-semibold text-white/40">Operación</p>
             <NavLink to="/admin/weeks" className={navItem} onClick={onNavigate}>
               <CalendarDays className="size-4" aria-hidden /> Gestión de semanas
+            </NavLink>
+            <NavLink to="/admin/surveys" className={navItem} onClick={onNavigate}>
+              <ClipboardList className="size-4" aria-hidden /> Plantillas de encuesta
             </NavLink>
             <NavLink to="/admin/audit" className={navItem} onClick={onNavigate}>
               <History className="size-4" aria-hidden /> Auditoría

@@ -28,4 +28,6 @@ export async function invalidate(...keys: string[]): Promise<void> {
 
 export const cacheKeys = {
   departmentScope: (userId: string) => `perm:scope:${userId}`,
+  // scope: 'all' (ADMIN) or a department id (its JEFE_AREA).
+  surveyDashboard: (workspaceId: string, period: string, scope: string) => `surveys:dash:${workspaceId}:${period}:${scope}`,
 };

@@ -17,6 +17,11 @@ const WorkspaceSettingsPage = lazy(() => import('./pages/admin/WorkspaceSettings
 const WeekManagementPage = lazy(() => import('./pages/admin/WeekManagementPage'));
 const AuditLogsPage = lazy(() => import('./pages/admin/AuditLogsPage'));
 const DocsPage = lazy(() => import('./pages/admin/DocsPage'));
+const SurveyTemplatesPage = lazy(() => import('./pages/admin/SurveyTemplatesPage'));
+const PerformancePage = lazy(() => import('./pages/performance/PerformancePage'));
+const SurveyResponsePage = lazy(() => import('./pages/performance/surveys/SurveyResponsePage'));
+const ReviewsPage = lazy(() => import('./pages/performance/ReviewsPage'));
+const ReviewDetailPage = lazy(() => import('./pages/performance/ReviewDetailPage'));
 
 function FullScreenSpinner() {
   return (
@@ -38,6 +43,12 @@ function RequireAuth() {
 function RequireAdmin() {
   const role = useAuth((s) => s.user?.role);
   return role === 'ADMIN' ? <Outlet /> : <Navigate to="/" replace />;
+}
+
+// Performance evaluations: everyone but read-only VIEWERs (the API enforces it too).
+function RequireContributor() {
+  const role = useAuth((s) => s.user?.role);
+  return role && role !== 'VIEWER' ? <Outlet /> : <Navigate to="/" replace />;
 }
 
 // Sign-in screens bounce signed-in users to the app.
@@ -79,6 +90,15 @@ export const router = createBrowserRouter([
           { path: '/tasks', element: page(<TasksPage />) },
           { path: '/task/:taskId', element: <TaskLink /> },
           {
+            element: <RequireContributor />,
+            children: [
+              { path: '/performance', element: page(<PerformancePage />) },
+              { path: '/performance/surveys/:surveyId', element: page(<SurveyResponsePage />) },
+              { path: '/performance/reviews', element: page(<ReviewsPage />) },
+              { path: '/performance/reviews/:reviewId', element: page(<ReviewDetailPage />) },
+            ],
+          },
+          {
             element: <RequireAdmin />,
             children: [
               { path: '/admin/import', element: page(<DataImportPage />) },
@@ -89,6 +109,7 @@ export const router = createBrowserRouter([
               { path: '/admin/weeks', element: page(<WeekManagementPage />) },
               { path: '/admin/audit', element: page(<AuditLogsPage />) },
               { path: '/admin/docs', element: page(<DocsPage />) },
+              { path: '/admin/surveys', element: page(<SurveyTemplatesPage />) },
               // Old links.
               { path: '/admin/branding', element: <Navigate to="/admin/settings/workspace" replace /> },
               { path: '/admin', element: <Navigate to="/admin/settings/users" replace /> },

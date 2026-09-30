@@ -60,6 +60,16 @@ export const ACTION_LABEL: Record<string, string> = {
   TASK_OBSERVATION_SET: 'Escribió observación',
   WORKSPACE_SETTINGS_UPDATED: 'Cambió la configuración',
   PERMISSIONS_UPDATED: 'Cambió permisos',
+  SURVEY_TEMPLATE_CREATED: 'Creó plantilla de encuesta',
+  SURVEY_TEMPLATE_UPDATED: 'Actualizó plantilla de encuesta',
+  SURVEY_TEMPLATE_DELETED: 'Eliminó plantilla de encuesta',
+  SURVEY_CREATED: 'Creó evaluación',
+  SURVEY_CREATED_WITHOUT_PRODUCTIVITY: 'Evaluación sin índice de productividad',
+  SURVEY_SUBMITTED: 'Envió evaluación',
+  SURVEY_RESPONSES_CORRECTED: 'Corrigió respuestas de evaluación',
+  SURVEY_CANCELLED: 'Canceló evaluación',
+  PERFORMANCE_REVIEW_UPDATED: 'Editó resultado de desempeño',
+  PERFORMANCE_REVIEW_PUBLISHED: 'Publicó resultado de desempeño',
 };
 
 const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD');

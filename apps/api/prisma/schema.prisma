@@ -114,6 +114,8 @@ enum NotificationType {
   KPI_REMINDER
   // "Tu semana está lista" to area heads when a week starts.
   WEEK_STARTED
+  // An evaluation to fill (self-assessment or manager review).
+  SURVEY_ASSIGNED
 }
 
 // ─── Workspace & branding ───────────────────────────────────────────────────
@@ -156,6 +158,9 @@ model Workspace {
   kpis                 Kpi[]
   functions            DepartmentFunction[]
   taskObservations     TaskObservation[]
+  surveyTemplates      SurveyTemplate[]
+  surveys              Survey[]
+  performanceReviews   PerformanceReview[]
 
   @@map("workspaces")
 }
@@ -204,6 +209,8 @@ model Department {
   taskMetrics TaskPerformanceMetric[]
   kpis        Kpi[]
   functions   DepartmentFunction[]
+  surveys     Survey[]
+  reviews     PerformanceReview[]
 
   @@unique([workspaceId, slug])
   @@index([workspaceId, deletedAt])
@@ -251,6 +258,13 @@ model User {
   performanceSnapshots UserPerformanceSnapshot[]
   assignedTaskMetrics  TaskPerformanceMetric[]      @relation("MetricAssignee")
   createdTaskMetrics   TaskPerformanceMetric[]      @relation("MetricCreator")
+  surveyTemplates      SurveyTemplate[]
+  surveysToFill        Survey[]                     @relation("SurveyEvaluator")
+  surveysAboutMe       Survey[]                     @relation("SurveyEvaluated")
+  surveysCreated       Survey[]                     @relation("SurveyCreator")
+  surveyResponses      SurveyResponse[]
+  performanceReviews   PerformanceReview[]          @relation("ReviewSubject")
+  reviewsPublished     PerformanceReview[]          @relation("ReviewPublisher")
 
   @@unique([workspaceId, email])
   @@index([email])
@@ -807,4 +821,213 @@ model Webhook {
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@map("webhooks")
+}
+
+// ─── Performance surveys (Phase 1) ──────────────────────────────────────────
+// A template (questions) is written by an ADMIN and frozen once ACTIVE. Each
+// Survey is one evaluation of one person by one evaluator: a self-assessment
+// (evaluator = evaluated) or a manager review. Completed surveys roll up into
+// the person's PerformanceReview for the quarter (see surveys/scoring.ts for
+// how Survey.dualScore relates to PerformanceReview.overallDualScore).
+
+enum SurveyTemplateStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+enum SurveyQuestionType {
+  LIKERT_5
+  LIKERT_7
+  // 0–100
+  NUMERIC
+  TEXT
+  // Order the question's options; not scored.
+  RANKING
+}
+
+enum SurveyType {
+  SELF_ASSESSMENT
+  MANAGER_REVIEW
+}
+
+enum SurveyStatus {
+  SCHEDULED
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+enum PerformanceRating {
+  EXCEEDS_EXPECTATIONS
+  MEETS_EXPECTATIONS
+  DEVELOPING
+  NEEDS_IMPROVEMENT
+  NOT_YET_RATED
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+model SurveyTemplate {
+  id          String               @id @default(uuid()) @db.Uuid
+  workspaceId String               @db.Uuid
+  name        String               @db.VarChar(120)
+  description String?              @db.VarChar(1000)
+  status      SurveyTemplateStatus @default(DRAFT)
+  createdById String               @db.Uuid
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+
+  workspace Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy User             @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  questions SurveyQuestion[]
+  surveys   Survey[]
+
+  @@index([workspaceId, status])
+  @@index([createdById])
+  @@map("survey_templates")
+}
+
+model SurveyQuestion {
+  id             String             @id @default(uuid()) @db.Uuid
+  templateId     String             @db.Uuid
+  questionNumber Int
+  text           String             @db.VarChar(500)
+  questionType   SurveyQuestionType
+  // Relative weight inside the performance score (scored types only).
+  weight         Float              @default(1)
+  required       Boolean            @default(true)
+  // RANKING items.
+  options        String[]
+  createdAt      DateTime           @default(now())
+
+  template  SurveyTemplate   @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  responses SurveyResponse[]
+
+  @@unique([templateId, questionNumber])
+  @@map("survey_questions")
+}
+
+model Survey {
+  id                   String       @id @default(uuid()) @db.Uuid
+  workspaceId          String       @db.Uuid
+  templateId           String       @db.Uuid
+  type                 SurveyType
+  title                String       @db.VarChar(160)
+  description          String?      @db.VarChar(1000)
+  evaluatorId          String       @db.Uuid
+  evaluatedUserId      String       @db.Uuid
+  // The evaluated person's department when the survey was created.
+  departmentId         String       @db.Uuid
+  createdById          String       @db.Uuid
+  startDate            DateTime
+  endDate              DateTime
+  // SCHEDULED → ACTIVE at startDate (scheduler) → COMPLETED on submit; CANCELLED by a manager.
+  status               SurveyStatus @default(SCHEDULED)
+  // "2026-Q3": the quarter being evaluated (default: that of startDate); the review it rolls into.
+  reviewPeriod         String       @db.VarChar(7)
+  totalQuestions       Int
+  answeredQuestions    Int          @default(0)
+  completionPercentage Float        @default(0)
+  completedAt          DateTime?
+  cancelledAt          DateTime?
+  // Module 1 snapshot taken at creation; null when it was unavailable.
+  productivityIndex    Float?
+  productivityData     Json?
+  // 0–100 from the scored answers; null when none of them was answered.
+  performanceScore     Float?
+  dualScore            Json?
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+
+  workspace     Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  template      SurveyTemplate   @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  evaluator     User             @relation("SurveyEvaluator", fields: [evaluatorId], references: [id], onDelete: Cascade)
+  evaluatedUser User             @relation("SurveyEvaluated", fields: [evaluatedUserId], references: [id], onDelete: Cascade)
+  createdBy     User             @relation("SurveyCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  department    Department       @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  responses     SurveyResponse[]
+
+  // A composite index also serves queries on its leading column(s), so the
+  // single-column ones (workspaceId, evaluatedUserId, departmentId, status) are implied.
+  @@index([workspaceId, status, createdAt])
+  @@index([templateId])
+  @@index([evaluatorId, status])
+  @@index([evaluatedUserId, createdAt])
+  @@index([evaluatedUserId, reviewPeriod, status])
+  @@index([departmentId, status])
+  @@index([status, startDate])
+  @@index([status, endDate])
+  @@index([createdById])
+  @@map("surveys")
+}
+
+// One answer per question; saved as a draft while the survey is open and
+// locked when it is submitted (an ADMIN may still correct it).
+model SurveyResponse {
+  id           String   @id @default(uuid()) @db.Uuid
+  surveyId     String   @db.Uuid
+  questionId   String   @db.Uuid
+  respondentId String   @db.Uuid
+  // number (LIKERT_*, NUMERIC), string (TEXT) or string[] (RANKING).
+  value        Json
+  comment      String?  @db.VarChar(2000)
+  answeredAt   DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  survey     Survey         @relation(fields: [surveyId], references: [id], onDelete: Cascade)
+  question   SurveyQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  respondent User           @relation(fields: [respondentId], references: [id], onDelete: Cascade)
+
+  @@unique([surveyId, questionId])
+  @@index([questionId])
+  @@index([respondentId])
+  @@map("survey_responses")
+}
+
+// A person's consolidated evaluation for one quarter, recomputed whenever one
+// of their surveys is completed. The evaluated person sees it once published.
+model PerformanceReview {
+  id                       String            @id @default(uuid()) @db.Uuid
+  workspaceId              String            @db.Uuid
+  userId                   String            @db.Uuid
+  departmentId             String?           @db.Uuid
+  reviewPeriod             String            @db.VarChar(7)
+  // Latest Module 1 snapshot among the period's surveys.
+  performanceData          Json?
+  surveysCompleted         Int               @default(0)
+  surveysInitiated         Int               @default(0)
+  selfAssessmentScore      Float?
+  managerReviewScore       Float?
+  overallPerformanceScore  Float?
+  overallProductivityIndex Float?
+  overallDualScore         Float?
+  performanceRating        PerformanceRating @default(NOT_YET_RATED)
+  riskLevel                RiskLevel?
+  managerComments          String?           @db.VarChar(4000)
+  employeeComments         String?           @db.VarChar(4000)
+  strengths                String[]
+  areasForImprovement      String[]
+  developmentGoals         String[]
+  nextReviewDate           DateTime?         @db.Date
+  publishedAt              DateTime?
+  publishedById            String?           @db.Uuid
+  createdAt                DateTime          @default(now())
+  updatedAt                DateTime          @updatedAt
+
+  workspace   Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User        @relation("ReviewSubject", fields: [userId], references: [id], onDelete: Cascade)
+  department  Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  publishedBy User?       @relation("ReviewPublisher", fields: [publishedById], references: [id], onDelete: SetNull)
+
+  @@unique([userId, reviewPeriod])
+  @@index([workspaceId, reviewPeriod, departmentId])
+  @@index([workspaceId, performanceRating])
+  @@index([departmentId])
+  @@index([publishedById])
+  @@map("performance_reviews")
 }

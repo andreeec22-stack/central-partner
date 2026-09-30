@@ -17,6 +17,8 @@ import { areaRoutes, kpiRoutes, weekRoutes } from './modules/weeks/weeks.routes'
 import { auditRoutes } from './modules/audit/audit.routes';
 import { permissionRoutes } from './modules/permissions/permissions.routes';
 import { workspaceRoutes } from './modules/workspace/workspace.routes';
+import { performanceRoutes } from './modules/performance/performance.routes';
+import { reviewRoutes, surveyRoutes } from './modules/surveys/surveys.routes';
 import { taskRoutes } from './modules/tasks/tasks.routes';
 import { publicUserRoutes, userRoutes } from './modules/users/users.routes';
 import type { AppEnv } from './types';
@@ -68,6 +70,9 @@ export function createApp() {
   api.route('/dashboard', dashboardRoutes);
   api.route('/excel-imports', excelImportRoutes);
   api.route('/workspaces', brandingRoutes);
+  api.route('/workspaces', performanceRoutes);
+  api.route('/surveys', surveyRoutes);
+  api.route('/performance-reviews', reviewRoutes);
   api.route('/public', publicBrandingRoutes);
   api.route('/storage', storageRoutes);
 
