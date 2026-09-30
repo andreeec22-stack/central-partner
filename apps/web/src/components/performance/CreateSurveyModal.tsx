@@ -32,7 +32,10 @@ export function CreateSurveyModal({ open, onClose }: { open: boolean; onClose: (
   const [period, setPeriod] = useState(currentPeriod());
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  const candidates = (people.data ?? []).filter((u) => u.id !== me?.id && u.role !== 'ADMIN' && u.departmentId);
+  // A head evaluates their team, not a peer head of the area (the API enforces it too).
+  const candidates = (people.data ?? []).filter(
+    (u) => u.id !== me?.id && u.role !== 'ADMIN' && u.departmentId && (me?.role === 'ADMIN' || u.role !== 'JEFE_AREA'),
+  );
 
   function close() {
     setErrors({});

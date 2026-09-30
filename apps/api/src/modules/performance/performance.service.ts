@@ -1,3 +1,4 @@
+import type { Role } from '@prisma/client';
 import { forbidden, notFound } from '../../lib/errors';
 import { prisma } from '../../lib/prisma';
 import { addDays, dateToDay, dayToDate, localDay, mondayOfDay } from '../../lib/week';
@@ -29,10 +30,17 @@ export interface PerformanceReport {
 const pct = (part: number, whole: number) => (whole > 0 ? Math.round((part / whole) * 1000) / 10 : null);
 
 // Who can see a person's numbers: ADMIN, the person, and the JEFE_AREA of the
-// person's own department (visibility grants over other areas don't extend to HR data).
-export function canSeePerformanceOf(viewer: AuthUser, subject: { id: string; departmentId: string | null }) {
+// person's own department — for their team only, not a peer head (CR-01).
+// Visibility grants over other areas don't extend to HR data.
+export function canSeePerformanceOf(viewer: AuthUser, subject: { id: string; departmentId: string | null; role: Role }) {
   if (viewer.role === 'ADMIN' || viewer.id === subject.id) return true;
-  return viewer.role === 'JEFE_AREA' && !!viewer.departmentId && viewer.departmentId === subject.departmentId;
+  return (
+    viewer.role === 'JEFE_AREA' &&
+    !!viewer.departmentId &&
+    viewer.departmentId === subject.departmentId &&
+    subject.role !== 'JEFE_AREA' &&
+    subject.role !== 'ADMIN'
+  );
 }
 
 export async function getPerformanceMetrics(
@@ -117,7 +125,7 @@ export async function getPerformanceMetrics(
 // GET /workspaces/:id/team/:userId/performance
 export async function performanceFor(viewer: AuthUser, workspaceId: string, userId: string, weeks: number) {
   if (workspaceId !== viewer.workspaceId) throw notFound('Workspace');
-  const subject = await prisma.user.findFirst({ where: { id: userId, workspaceId, deletedAt: null }, select: { id: true, departmentId: true } });
+  const subject = await prisma.user.findFirst({ where: { id: userId, workspaceId, deletedAt: null }, select: { id: true, departmentId: true, role: true } });
   if (!subject) throw notFound('User');
   if (!canSeePerformanceOf(viewer, subject)) throw forbidden('Solo el director, el jefe del área o la propia persona ven su desempeño');
   return getPerformanceMetrics(userId, workspaceId, viewer.workspaceTimezone, weeks);

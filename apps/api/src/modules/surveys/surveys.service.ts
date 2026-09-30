@@ -1,8 +1,8 @@
-import type { Prisma, Survey, SurveyType } from '@prisma/client';
+import type { Prisma, Survey, SurveyStatus, SurveyType } from '@prisma/client';
 import { AppError, conflict, forbidden, notFound, validationError } from '../../lib/errors';
 import { logger } from '../../lib/logger';
 import { toSkipTake } from '../../lib/pagination';
-import { prisma } from '../../lib/prisma';
+import { prisma, type Tx } from '../../lib/prisma';
 import { emitTo, rooms } from '../../lib/realtime';
 import { localDay } from '../../lib/week';
 import type { AuthUser } from '../../types';
@@ -63,7 +63,7 @@ export async function captureProductivity(workspaceId: string, userId: string, t
 const summaryInclude = {
   template: { select: { id: true, name: true } },
   evaluator: { select: { id: true, displayName: true } },
-  evaluatedUser: { select: { id: true, displayName: true } },
+  evaluatedUser: { select: { id: true, displayName: true, role: true } },
   department: { select: { id: true, name: true, color: true } },
 } satisfies Prisma.SurveyInclude;
 type SurveyRow = Prisma.SurveyGetPayload<{ include: typeof summaryInclude }>;
@@ -75,7 +75,17 @@ const detailInclude = {
 } satisfies Prisma.SurveyInclude;
 type SurveyDetailRow = Prisma.SurveyGetPayload<{ include: typeof detailInclude }>;
 
-const isOpen = (s: Pick<Survey, 'status'>) => s.status === 'SCHEDULED' || s.status === 'ACTIVE';
+const OPEN: SurveyStatus[] = ['SCHEDULED', 'ACTIVE'];
+const isOpen = (s: Pick<Survey, 'status'>) => OPEN.includes(s.status);
+
+// CR-02: every write re-checks, under the row lock, that the survey is still in
+// a state the checks were made for. The UPDATE locks the row until the
+// transaction ends, so a concurrent submit/cancel/save waits for it and then
+// finds the status changed → 409 instead of silently overwriting.
+async function claim(tx: Tx, id: string, statuses: SurveyStatus[]) {
+  const { count } = await tx.survey.updateMany({ where: { id, status: { in: statuses } }, data: { updatedAt: new Date() } });
+  if (count === 0) throw new AppError(409, 'SURVEY_STATE_CHANGED', 'La encuesta cambió de estado mientras tanto; recarga la página');
+}
 
 function presentSummary(user: AuthUser, s: SurveyRow, now = new Date()) {
   return {
@@ -87,7 +97,7 @@ function presentSummary(user: AuthUser, s: SurveyRow, now = new Date()) {
     isOverdue: isOpen(s) && s.endDate < now,
     template: { id: s.template.id, name: s.template.name },
     evaluator: s.evaluator,
-    evaluatedUser: s.evaluatedUser,
+    evaluatedUser: { id: s.evaluatedUser.id, displayName: s.evaluatedUser.displayName },
     department: s.department,
     startDate: s.startDate,
     endDate: s.endDate,
@@ -103,7 +113,7 @@ function presentSummary(user: AuthUser, s: SurveyRow, now = new Date()) {
     createdAt: s.createdAt,
     permissions: {
       canAnswer: answerBlock(user, s, now) === null,
-      canCancel: isOpen(s) && canManageEvaluationsOf(user, { id: s.evaluatedUserId, departmentId: s.departmentId }),
+      canCancel: isOpen(s) && canManageEvaluationsOf(user, { id: s.evaluatedUserId, departmentId: s.departmentId, role: s.evaluatedUser.role }),
     },
   };
 }
@@ -173,6 +183,13 @@ async function afterStatusChange(s: Survey) {
 
 // ─── Create ─────────────────────────────────────────────────────────────────
 
+// One open (SCHEDULED/ACTIVE) survey per evaluated person, evaluator and type.
+// (A self-assessment and a manager review of the same person are different pairs.)
+async function assertNoOpenDuplicate(db: Tx, pair: Pick<Survey, 'workspaceId' | 'evaluatedUserId' | 'evaluatorId' | 'type'>) {
+  const duplicate = await db.survey.findFirst({ where: { ...pair, status: { in: OPEN } }, select: { id: true } });
+  if (duplicate) throw conflict('Ya hay una encuesta abierta igual para esta persona', 'SURVEY_EXISTS', { surveyId: duplicate.id });
+}
+
 export async function createSurvey(user: AuthUser, input: CreateSurveyInput, ctx: ClientContext) {
   if (user.role !== 'ADMIN' && user.role !== 'JEFE_AREA') throw forbidden('Solo el director o un jefe de área crean evaluaciones');
 
@@ -202,20 +219,25 @@ export async function createSurvey(user: AuthUser, input: CreateSurveyInput, ctx
     if (evaluatorId === evaluated.id) throw validationError('Nadie hace la evaluación de jefe sobre sí mismo', [{ field: 'evaluatorId', message: 'same as evaluated' }]);
     const evaluator = evaluatorId === user.id ? { ...user, workspaceId: user.workspaceId, deletedAt: null } : await prisma.user.findUnique({ where: { id: evaluatorId } });
     validateUserExists(evaluator, user.workspaceId, 'evaluatorId');
-    const managesArea = evaluator.role === 'ADMIN' || (evaluator.role === 'JEFE_AREA' && evaluator.departmentId === evaluated.departmentId);
+    // An area head reviews their team; another head (a peer) is reviewed by the director (CR-01).
+    const managesArea =
+      evaluator.role === 'ADMIN' ||
+      (evaluator.role === 'JEFE_AREA' && evaluator.departmentId === evaluated.departmentId && evaluated.role !== 'JEFE_AREA');
     if (!managesArea) throw validationError('El evaluador debe ser el director o el jefe del área', [{ field: 'evaluatorId', message: 'not a manager of the area' }]);
   }
 
-  const duplicate = await prisma.survey.findFirst({
-    where: { workspaceId: user.workspaceId, evaluatedUserId: evaluated.id, evaluatorId, type: input.type, status: { in: ['SCHEDULED', 'ACTIVE'] } },
-    select: { id: true },
-  });
-  if (duplicate) throw conflict('Ya hay una encuesta abierta igual para esta persona', 'SURVEY_EXISTS', { surveyId: duplicate.id });
+  const pair = { workspaceId: user.workspaceId, evaluatedUserId: evaluated.id, evaluatorId, type: input.type };
+  // Cheap early answer before paying for Module 1; the check that counts is the locked one below.
+  await assertNoOpenDuplicate(prisma, pair);
 
   const productivity = await captureProductivity(user.workspaceId, evaluated.id, user.workspaceTimezone);
   const period = input.reviewPeriod ?? reviewPeriodOf(localDay(input.startDate, user.workspaceTimezone));
 
   const survey = await prisma.$transaction(async (tx) => {
+    // CR-03: two concurrent creations of the same (evaluated, evaluator, type)
+    // queue on this lock, so the second one sees the first and gets 409.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`survey:${evaluated.id}:${evaluatorId}:${input.type}`}, 0))`;
+    await assertNoOpenDuplicate(tx, pair);
     const created = await tx.survey.create({
       data: {
         workspaceId: user.workspaceId,
@@ -320,6 +342,8 @@ export async function saveResponses(user: AuthUser, id: string, input: SaveRespo
 
   const correcting = s.status === 'COMPLETED';
   const updated = await prisma.$transaction(async (tx) => {
+    // SCHEDULED→ACTIVE by the scheduler meanwhile is fine; submitted/cancelled is not.
+    await claim(tx, s.id, isOpen(s) ? OPEN : [s.status]);
     for (const a of input.answers) {
       if (a.value === null) {
         await tx.surveyResponse.deleteMany({ where: { surveyId: s.id, questionId: a.questionId } });
@@ -373,10 +397,14 @@ export async function submitSurvey(user: AuthUser, id: string, ctx: ClientContex
   if (s.status === 'COMPLETED') throw new AppError(409, 'SURVEY_ALREADY_SUBMITTED', 'La encuesta ya fue enviada');
 
   validateSurveyCompletion(s.template.questions, new Set(s.responses.map((r) => r.questionId)));
-  const performanceScore = calculatePerformanceScore(s.template.questions, s.responses);
-  const dualScore = calculateDualScore(s.productivityIndex, performanceScore);
 
   const updated = await prisma.$transaction(async (tx) => {
+    await claim(tx, s.id, OPEN);
+    // Scored from the answers as they are under the lock, not as first read.
+    const responses = await tx.surveyResponse.findMany({ where: { surveyId: s.id } });
+    validateSurveyCompletion(s.template.questions, new Set(responses.map((r) => r.questionId)));
+    const performanceScore = calculatePerformanceScore(s.template.questions, responses);
+    const dualScore = calculateDualScore(s.productivityIndex, performanceScore);
     const done = await tx.survey.update({
       where: { id: s.id },
       data: {
@@ -384,8 +412,8 @@ export async function submitSurvey(user: AuthUser, id: string, ctx: ClientContex
         completedAt: new Date(),
         performanceScore,
         dualScore: dualScore as unknown as Prisma.InputJsonValue,
-        answeredQuestions: s.responses.length,
-        completionPercentage: s.totalQuestions > 0 ? Math.round((s.responses.length / s.totalQuestions) * 1000) / 10 : 0,
+        answeredQuestions: responses.length,
+        completionPercentage: s.totalQuestions > 0 ? Math.round((responses.length / s.totalQuestions) * 1000) / 10 : 0,
       },
     });
     await logActivity(
@@ -409,10 +437,11 @@ export async function submitSurvey(user: AuthUser, id: string, ctx: ClientContex
 
 export async function cancelSurvey(user: AuthUser, id: string, ctx: ClientContext) {
   const s = await loadVisible(user, id);
-  if (!canManageEvaluationsOf(user, { id: s.evaluatedUserId, departmentId: s.departmentId })) throw forbidden('Solo el director o el jefe del área cancelan');
+  if (!canManageEvaluationsOf(user, { id: s.evaluatedUserId, departmentId: s.departmentId, role: s.evaluatedUser.role })) throw forbidden('Solo el director o el jefe del área cancelan');
   if (!isOpen(s)) throw new AppError(409, 'SURVEY_CLOSED', 'Solo se cancelan encuestas pendientes');
 
   const updated = await prisma.$transaction(async (tx) => {
+    await claim(tx, id, OPEN);
     const done = await tx.survey.update({ where: { id }, data: { status: 'CANCELLED', cancelledAt: new Date() } });
     await logActivity(
       {

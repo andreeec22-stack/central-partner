@@ -53,7 +53,7 @@ const include = {
 type ReviewRow = PerformanceReview & Prisma.PerformanceReviewGetPayload<{ include: typeof include }>;
 
 function present(user: AuthUser, r: ReviewRow) {
-  const subject = { id: r.userId, departmentId: r.departmentId };
+  const subject = { id: r.userId, departmentId: r.departmentId, role: r.user.role };
   const canManage = canManageEvaluationsOf(user, subject);
   return {
     id: r.id,
@@ -132,7 +132,7 @@ const MANAGER_FIELDS = ['managerComments', 'strengths', 'areasForImprovement', '
 export async function updateReview(user: AuthUser, id: string, input: UpdateReviewInput, ctx: ClientContext) {
   const r = await findVisible(user, id);
   const wantsManagerFields = MANAGER_FIELDS.some((f) => input[f] !== undefined);
-  if (wantsManagerFields && !canManageEvaluationsOf(user, { id: r.userId, departmentId: r.departmentId })) {
+  if (wantsManagerFields && !canManageEvaluationsOf(user, { id: r.userId, departmentId: r.departmentId, role: r.user.role })) {
     throw forbidden('Solo el director o el jefe del área editan la evaluación');
   }
   if (input.employeeComments !== undefined) {
@@ -166,7 +166,7 @@ export async function updateReview(user: AuthUser, id: string, input: UpdateRevi
 
 export async function publishReview(user: AuthUser, id: string, ctx: ClientContext) {
   const r = await findVisible(user, id);
-  if (!canManageEvaluationsOf(user, { id: r.userId, departmentId: r.departmentId })) throw forbidden('Solo el director o el jefe del área publican');
+  if (!canManageEvaluationsOf(user, { id: r.userId, departmentId: r.departmentId, role: r.user.role })) throw forbidden('Solo el director o el jefe del área publican');
   if (r.publishedAt) throw new AppError(409, 'REVIEW_ALREADY_PUBLISHED', 'La evaluación ya está publicada');
   if (r.surveysCompleted === 0) throw validationError('No hay encuestas completadas que publicar');
 

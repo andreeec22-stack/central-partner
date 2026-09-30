@@ -201,8 +201,9 @@ describe('survey access (Risk 1)', () => {
     timezone: 'UTC',
     workspaceTimezone: 'America/Lima',
   });
-  const survey = (over: Partial<Survey> = {}) =>
-    ({ evaluatorId: 'jefe', evaluatedUserId: 'ana', departmentId: 'mkt', type: 'MANAGER_REVIEW', status: 'ACTIVE', ...over }) as Survey;
+  type Ref = Parameters<typeof checkSurveyAccess>[1];
+  const survey = (over: Partial<Survey> = {}, evaluatedRole: AuthUser['role'] = 'USER') =>
+    ({ evaluatorId: 'jefe', evaluatedUserId: 'ana', departmentId: 'mkt', type: 'MANAGER_REVIEW', status: 'ACTIVE', ...over, evaluatedUser: { role: evaluatedRole } }) as Ref;
 
   it('ADMIN sees everything, VIEWER nothing', () => {
     expect(checkSurveyAccess(user('ADMIN', 'dir', null), survey())).toBe(true);
@@ -216,7 +217,7 @@ describe('survey access (Risk 1)', () => {
   });
 
   it('nobody but the director sees evaluations about themselves before publication', () => {
-    const aboutJefe = survey({ evaluatorId: 'dir', evaluatedUserId: 'jefe', status: 'COMPLETED' });
+    const aboutJefe = survey({ evaluatorId: 'dir', evaluatedUserId: 'jefe', status: 'COMPLETED' }, 'JEFE_AREA');
     expect(checkSurveyAccess(user('JEFE_AREA', 'jefe', 'mkt'), aboutJefe)).toBe(false);
     expect(checkSurveyAccess(user('JEFE_AREA', 'jefe', 'mkt'), aboutJefe, true)).toBe(true);
   });
@@ -229,16 +230,27 @@ describe('survey access (Risk 1)', () => {
     expect(checkSurveyAccess(user('USER', 'luis', 'mkt'), survey({ type: 'SELF_ASSESSMENT', evaluatorId: 'ana' }))).toBe(false);
   });
 
+  it('CR-01: a JEFE_AREA never sees evaluations about a peer head of the same area', () => {
+    const aboutPeer = survey({ evaluatorId: 'dir', evaluatedUserId: 'jefe-b', status: 'COMPLETED' }, 'JEFE_AREA');
+    expect(checkSurveyAccess(user('JEFE_AREA', 'jefe-a', 'mkt'), aboutPeer)).toBe(false);
+    expect(checkSurveyAccess(user('JEFE_AREA', 'jefe-a', 'mkt'), aboutPeer, true)).toBe(false);
+    expect(checkSurveyAccess(user('ADMIN', 'dir', null), aboutPeer)).toBe(true);
+    // …but still sees the team, VIEWERs included.
+    expect(checkSurveyAccess(user('JEFE_AREA', 'jefe-a', 'mkt'), survey({ evaluatorId: 'dir' }, 'VIEWER'))).toBe(true);
+    expect(canManageEvaluationsOf(user('JEFE_AREA', 'jefe-a', 'mkt'), { id: 'jefe-b', departmentId: 'mkt', role: 'JEFE_AREA' })).toBe(false);
+    expect(checkReviewAccess(user('JEFE_AREA', 'jefe-a', 'mkt'), { userId: 'jefe-b', departmentId: 'mkt', publishedAt: null, user: { role: 'JEFE_AREA' } })).toBe(false);
+  });
+
   it('managing evaluations: ADMIN anyone, JEFE their own department except themselves', () => {
-    expect(canManageEvaluationsOf(user('ADMIN', 'dir', null), { id: 'x', departmentId: 'fin' })).toBe(true);
-    expect(canManageEvaluationsOf(user('JEFE_AREA', 'jefe', 'mkt'), { id: 'ana', departmentId: 'mkt' })).toBe(true);
-    expect(canManageEvaluationsOf(user('JEFE_AREA', 'jefe', 'mkt'), { id: 'jefe', departmentId: 'mkt' })).toBe(false);
-    expect(canManageEvaluationsOf(user('JEFE_AREA', 'jefe', 'mkt'), { id: 'carla', departmentId: 'fin' })).toBe(false);
-    expect(canManageEvaluationsOf(user('USER', 'ana', 'mkt'), { id: 'luis', departmentId: 'mkt' })).toBe(false);
+    expect(canManageEvaluationsOf(user('ADMIN', 'dir', null), { id: 'x', departmentId: 'fin', role: 'JEFE_AREA' })).toBe(true);
+    expect(canManageEvaluationsOf(user('JEFE_AREA', 'jefe', 'mkt'), { id: 'ana', departmentId: 'mkt', role: 'USER' })).toBe(true);
+    expect(canManageEvaluationsOf(user('JEFE_AREA', 'jefe', 'mkt'), { id: 'jefe', departmentId: 'mkt', role: 'JEFE_AREA' })).toBe(false);
+    expect(canManageEvaluationsOf(user('JEFE_AREA', 'jefe', 'mkt'), { id: 'carla', departmentId: 'fin', role: 'USER' })).toBe(false);
+    expect(canManageEvaluationsOf(user('USER', 'ana', 'mkt'), { id: 'luis', departmentId: 'mkt', role: 'USER' })).toBe(false);
   });
 
   it('reviews: the subject only once published', () => {
-    const review = { userId: 'ana', departmentId: 'mkt', publishedAt: null as Date | null };
+    const review = { userId: 'ana', departmentId: 'mkt', publishedAt: null as Date | null, user: { role: 'USER' as const } };
     expect(checkReviewAccess(user('USER', 'ana', 'mkt'), review)).toBe(false);
     expect(checkReviewAccess(user('USER', 'ana', 'mkt'), { ...review, publishedAt: new Date() })).toBe(true);
     expect(checkReviewAccess(user('JEFE_AREA', 'jefe', 'mkt'), review)).toBe(true);

@@ -5,7 +5,7 @@ import { env } from './config/env';
 import { prisma } from './lib/prisma';
 import { getRedis } from './lib/redis';
 import { errorHandler, notFoundHandler } from './middleware/error-handler';
-import { rateLimit } from './middleware/rate-limit';
+import { rateLimit, userOrIpKey } from './middleware/rate-limit';
 import { requestContext } from './middleware/request-context';
 import { authRoutes } from './modules/auth/auth.routes';
 import { brandingRoutes, publicBrandingRoutes } from './modules/branding/branding.routes';
@@ -55,7 +55,8 @@ export function createApp() {
   });
 
   const api = new Hono<AppEnv>();
-  api.use('*', rateLimit({ prefix: 'api', max: env.RATE_LIMIT_MAX, windowSeconds: env.RATE_LIMIT_WINDOW_SECONDS }));
+  // Per signed-in user (per IP only for anonymous calls); /auth adds its own per-IP limits.
+  api.use('*', rateLimit({ prefix: 'api', max: env.RATE_LIMIT_MAX, windowSeconds: env.RATE_LIMIT_WINDOW_SECONDS, keyBy: userOrIpKey }));
   api.route('/auth', authRoutes);
   api.route('/users', publicUserRoutes);
   api.route('/users', userRoutes);

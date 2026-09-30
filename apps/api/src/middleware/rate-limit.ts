@@ -2,6 +2,7 @@ import type { Context } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { tooManyRequests } from '../lib/errors';
 import { getRedis } from '../lib/redis';
+import { verifyAccessToken } from '../lib/tokens';
 import type { AppEnv } from '../types';
 
 // Fixed-window counter. Redis when available (shared across instances), otherwise
@@ -47,6 +48,16 @@ async function hit(key: string, windowSeconds: number) {
     }
   }
   return memory.hit(key, windowSeconds);
+}
+
+// S6: the global /api limiter runs before requireAuth, so c.get('user') is still
+// empty there and the key used to fall back to the IP — a whole office behind
+// one NAT shared a single budget. A valid access token identifies the person
+// instead (signature check only, no DB); anonymous or invalid → the IP.
+export function userOrIpKey(c: Context<AppEnv>): string {
+  const header = c.req.header('authorization');
+  const claims = header?.startsWith('Bearer ') ? verifyAccessToken(header.slice(7).trim()) : null;
+  return claims ? `user:${claims.sub}` : `ip:${c.get('clientIp')}`;
 }
 
 interface Options {

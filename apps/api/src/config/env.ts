@@ -41,6 +41,7 @@ const schema = z.object({
     .transform((v) => v === 'true'),
 
   RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
+  // Requests per window per signed-in user (per IP for anonymous calls).
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(300),
   AUTH_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),
 

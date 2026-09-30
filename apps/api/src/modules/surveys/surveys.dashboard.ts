@@ -5,6 +5,7 @@ import { prisma } from '../../lib/prisma';
 import { localDay } from '../../lib/week';
 import type { AuthUser } from '../../types';
 import { mean, overallScoreOf, reviewPeriodOf } from './scoring';
+import { teamReviewFilter, teamSurveyFilter } from './surveys.access';
 
 // Per-department summary of a quarter's evaluations for managers. Cached for
 // 5 minutes and invalidated whenever a survey changes status or a review is
@@ -40,12 +41,13 @@ export async function surveyDashboard(user: AuthUser, period = currentPeriod(use
 
 async function build(user: AuthUser, period: string) {
   const now = new Date();
-  const own = user.role === 'ADMIN' ? {} : { departmentId: user.departmentId!, evaluatedUserId: { not: user.id } };
+  // A JEFE_AREA sees their team only: not themselves, not a peer head (CR-01).
+  const own = user.role === 'ADMIN' ? {} : teamSurveyFilter(user);
   const surveyWhere: Prisma.SurveyWhereInput = { workspaceId: user.workspaceId, reviewPeriod: period, ...own };
   const reviewWhere: Prisma.PerformanceReviewWhereInput = {
     workspaceId: user.workspaceId,
     reviewPeriod: period,
-    ...(user.role === 'ADMIN' ? {} : { departmentId: user.departmentId!, userId: { not: user.id } }),
+    ...(user.role === 'ADMIN' ? {} : teamReviewFilter(user)),
   };
 
   const [departments, surveys, reviews] = await Promise.all([

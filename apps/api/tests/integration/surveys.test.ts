@@ -399,3 +399,81 @@ describe('performance reviews (Risk 6)', () => {
     expect((await call('GET', '/api/v1/surveys/dashboard', { token: s.mkt.user.token })).status).toBe(403);
   });
 });
+
+describe('fixes from the Phase 1 review', () => {
+  it('CR-01: two heads of the same area never see each other’s evaluations', async () => {
+    const t = await activeTemplate();
+    // Marketing has two JEFE_AREA: mkt.jefe and mkt.jefeNoGrant. The director evaluates the first.
+    const aboutJefe = await createSurvey(s.admin.token, { templateId: t.id, type: 'MANAGER_REVIEW', evaluatedUserId: s.mkt.jefe.id });
+    expect(aboutJefe.status).toBe(201);
+    await answerAndSubmit(s.admin, aboutJefe.body.survey.id, t);
+    const peer = s.mkt.jefeNoGrant;
+
+    expect((await call('GET', `/api/v1/surveys/${aboutJefe.body.survey.id}`, { token: peer.token })).status).toBe(403);
+    expect((await call('GET', '/api/v1/surveys', { token: peer.token })).body.pagination.total).toBe(0);
+    const review = await prisma.performanceReview.findFirstOrThrow({ where: { userId: s.mkt.jefe.id } });
+    expect((await call('GET', `/api/v1/performance-reviews/${review.id}`, { token: peer.token })).status).toBe(403);
+    expect((await call('GET', '/api/v1/performance-reviews', { token: peer.token })).body.data).toHaveLength(0);
+    const dash = await call('GET', `/api/v1/surveys/dashboard?period=${aboutJefe.body.survey.reviewPeriod}`, { token: peer.token });
+    expect(dash.body.totals.surveys.total).toBe(0);
+    // Module 1 numbers of a peer are closed too; the team's stay open.
+    expect((await call('GET', `/api/v1/workspaces/${s.workspaceId}/team/${s.mkt.jefe.id}/performance`, { token: peer.token })).status).toBe(403);
+    expect((await call('GET', `/api/v1/workspaces/${s.workspaceId}/team/${s.mkt.user.id}/performance`, { token: peer.token })).status).toBe(200);
+
+    // Nor can one head evaluate the other, directly or as the director's chosen evaluator.
+    expect((await createSurvey(peer.token, { templateId: t.id, type: 'MANAGER_REVIEW', evaluatedUserId: s.mkt.jefe.id })).status).toBe(403);
+    const viaDirector = await createSurvey(s.admin.token, { templateId: t.id, type: 'SELF_ASSESSMENT', evaluatedUserId: s.mkt.jefe.id });
+    expect(viaDirector.status).toBe(201);
+    expect((await createSurvey(s.admin.token, { templateId: t.id, type: 'MANAGER_REVIEW', evaluatedUserId: s.mkt.jefe.id, evaluatorId: peer.id })).status).toBe(422);
+  });
+
+  it('CR-02: a submit and a cancel racing leave one consistent outcome', async () => {
+    for (let round = 0; round < 5; round++) {
+      await resetDatabase();
+      s = await seedWorkspace();
+      const tpl = await activeTemplate();
+      const { body } = await createSurvey(s.mkt.jefe.token, { templateId: tpl.id, type: 'SELF_ASSESSMENT', evaluatedUserId: s.mkt.user.id });
+      const id = body.survey.id;
+      await call('POST', `/api/v1/surveys/${id}/responses`, { token: s.mkt.user.token, body: { answers: fullAnswers(tpl) } });
+
+      const [submit, cancel] = await Promise.all([
+        call('POST', `/api/v1/surveys/${id}/submit`, { token: s.mkt.user.token }),
+        call('POST', `/api/v1/surveys/${id}/cancel`, { token: s.mkt.jefe.token }),
+      ]);
+      // Exactly one wins; the loser gets a 409, never a silent overwrite.
+      expect([submit.status, cancel.status].sort()).toEqual([200, 409]);
+      const final = await prisma.survey.findUniqueOrThrow({ where: { id } });
+      expect(final.status).toBe(submit.status === 200 ? 'COMPLETED' : 'CANCELLED');
+      const logs = await prisma.activityLog.count({ where: { entityId: id, action: { in: ['SURVEY_SUBMITTED', 'SURVEY_CANCELLED'] } } });
+      expect(logs).toBe(1);
+      const review = await prisma.performanceReview.findFirst({ where: { userId: s.mkt.user.id } });
+      expect(review?.surveysCompleted ?? 0).toBe(final.status === 'COMPLETED' ? 1 : 0);
+    }
+  });
+
+  it('CR-02: two submits racing complete the survey once', async () => {
+    const t = await activeTemplate();
+    const { body } = await createSurvey(s.mkt.jefe.token, { templateId: t.id, type: 'SELF_ASSESSMENT', evaluatedUserId: s.mkt.user.id });
+    await call('POST', `/api/v1/surveys/${body.survey.id}/responses`, { token: s.mkt.user.token, body: { answers: fullAnswers(t) } });
+    const results = await Promise.all([1, 2, 3].map(() => call('POST', `/api/v1/surveys/${body.survey.id}/submit`, { token: s.mkt.user.token })));
+    expect(results.filter((r) => r.status === 200)).toHaveLength(1);
+    expect(results.filter((r) => r.status === 409)).toHaveLength(2);
+    expect(await prisma.activityLog.count({ where: { entityId: body.survey.id, action: 'SURVEY_SUBMITTED' } })).toBe(1);
+  });
+
+  it('CR-03: concurrent creations of the same evaluation produce exactly one', async () => {
+    const t = await activeTemplate();
+    const req = { templateId: t.id, type: 'MANAGER_REVIEW', evaluatedUserId: s.mkt.user.id };
+    const results = await Promise.all([1, 2, 3, 4].map(() => createSurvey(s.mkt.jefe.token, req)));
+    expect(results.filter((r) => r.status === 201)).toHaveLength(1);
+    expect(results.filter((r) => r.status === 409).every((r) => r.body.error.code === 'SURVEY_EXISTS')).toBe(true);
+    expect(await prisma.survey.count({ where: { evaluatedUserId: s.mkt.user.id, type: 'MANAGER_REVIEW' } })).toBe(1);
+
+    // The self-assessment + manager review pair of the same person, template and dates is NOT a duplicate.
+    const pair = await Promise.all([
+      createSurvey(s.mkt.jefe.token, { ...req, type: 'SELF_ASSESSMENT', evaluatedUserId: s.mkt.user2.id }),
+      createSurvey(s.mkt.jefe.token, { ...req, evaluatedUserId: s.mkt.user2.id }),
+    ]);
+    expect(pair.map((r) => r.status)).toEqual([201, 201]);
+  });
+});
