@@ -9,6 +9,7 @@ import { useDepartments } from '../../lib/queries';
 import { useRealtime, type ConnectionState } from '../../lib/realtime';
 import { useAuth } from '../../stores/auth';
 import { BrandMark } from './BrandMark';
+import { ConflictDialog } from '../task/ConflictDialog';
 
 function LiveIndicator({ state }: { state: ConnectionState }) {
   const label = state === 'live' ? 'En vivo' : state === 'connecting' ? 'Conectando…' : 'Sin conexión';
@@ -177,6 +178,7 @@ export function AppShell() {
         </header>
         <main className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:py-8">
           <Outlet />
+          <ConflictDialog />
         </main>
       </div>
     </div>

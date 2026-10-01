@@ -168,8 +168,20 @@ async function main() {
   const now = new Date();
   const currentMonday = mondayOf(now, TZ);
 
-  const createWeek = async (monday: string) =>
-    prisma.week.create({ data: { workspaceId: ws.id, mondayDate: dayToDate(monday), ...isoWeek(monday), createdById: director.id } });
+  // A running API's scheduler may create the current week of this brand-new
+  // workspace before the seed gets to it: reuse it and drop whatever it copied,
+  // the seed defines the week's KPIs and functions itself.
+  const createWeek = async (monday: string) => {
+    const week = await prisma.week.upsert({
+      where: { workspaceId_mondayDate: { workspaceId: ws.id, mondayDate: dayToDate(monday) } },
+      create: { workspaceId: ws.id, mondayDate: dayToDate(monday), ...isoWeek(monday), createdById: director.id },
+      update: {},
+    });
+    await prisma.kpi.deleteMany({ where: { weekId: week.id } });
+    await prisma.departmentFunction.deleteMany({ where: { weekId: week.id } });
+    await prisma.task.deleteMany({ where: { weekId: week.id } });
+    return week;
+  };
 
   const addDefinitions = async (weekId: string, historyIndex: number | null) => {
     for (const a of areas) {

@@ -21,6 +21,7 @@ import type {
   WeekDashboard,
 } from './types';
 import { toast } from '../stores/toast';
+import { useConflict } from '../stores/conflict';
 
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -112,6 +113,9 @@ export type TaskPatch = Partial<{
   kpiActual: string | null;
   assignedTo: string | null;
   dueDate: string | null;
+  // The task version (updatedAt) the edit is based on; a newer one on the
+  // server means someone else saved first → 409 TASK_CONFLICT.
+  expectedUpdatedAt: string;
 }>;
 
 // The semaphore depends on the task's day; optimistically only 100% is certain
@@ -122,11 +126,25 @@ function optimisticSemaphore(task: Task, progress: number): Task['semaphore'] {
 
 // Optimistic: the row changes instantly; the server's answer (which may derive
 // more, e.g. status DONE at 100%) replaces it, and errors roll back.
+// This client's own last save per task: version it was based on → version
+// the server returned. A follow-up edit made before the first answered (fast
+// progress clicks) is based on the same old version; it is our own change, not
+// someone else's, so it moves on to the version we produced.
+const ownSaves = new Map<string, { from: string; to: string }>();
+
 export function useUpdateTask() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, patch }: { id: string; patch: TaskPatch }) =>
-      api<{ task: Task }>(`/tasks/${id}`, { method: 'PATCH', body: patch }),
+    // Saves run one after another, so the chain above is always up to date.
+    scope: { id: 'task-updates' },
+    mutationFn: ({ id, patch }: { id: string; patch: TaskPatch }) => {
+      const own = ownSaves.get(id);
+      const body = own && patch.expectedUpdatedAt === own.from ? { ...patch, expectedUpdatedAt: own.to } : patch;
+      return api<{ task: Task }>(`/tasks/${id}`, { method: 'PATCH', body }).then((res) => {
+        if (body.expectedUpdatedAt) ownSaves.set(id, { from: patch.expectedUpdatedAt!, to: res.task.updatedAt });
+        return res;
+      });
+    },
     onMutate: async ({ id, patch }) => {
       await qc.cancelQueries({ queryKey: keys.tasks });
       const snapshots = qc.getQueriesData<Paginated<Task>>({ queryKey: ['tasks', 'list'] });
@@ -150,9 +168,10 @@ export function useUpdateTask() {
       }
       return { snapshots };
     },
-    onError: (error, _vars, ctx) => {
+    onError: (error, { id }, ctx) => {
       for (const [key, data] of ctx?.snapshots ?? []) qc.setQueryData(key, data);
-      toast.error(error instanceof ApiError ? error.message : 'No se pudo guardar el cambio');
+      if (error instanceof ApiError && error.code === 'TASK_CONFLICT') useConflict.getState().show(id, error.message);
+      else toast.error(error instanceof ApiError ? error.message : 'No se pudo guardar el cambio');
     },
     onSuccess: ({ task }) => {
       for (const [key, data] of qc.getQueriesData<Paginated<Task>>({ queryKey: ['tasks', 'list'] })) {

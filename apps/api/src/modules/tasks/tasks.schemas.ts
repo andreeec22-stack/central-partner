@@ -61,9 +61,13 @@ export const updateTaskSchema = z
     kpiActual: shortText.nullable(),
     blockReason: shortText.nullable(),
     parentTaskId: z.string().uuid().nullable(),
+    // Optimistic concurrency: the task's updatedAt the client's edit is based
+    // on. If someone saved in between, the update is refused with 409
+    // TASK_CONFLICT (first write wins). Optional: older clients still work.
+    expectedUpdatedAt: z.coerce.date(),
   })
   .partial()
-  .refine((v) => Object.keys(v).length > 0, 'Nothing to update');
+  .refine((v) => Object.keys(v).some((k) => k !== 'expectedUpdatedAt'), 'Nothing to update');
 export type UpdateTaskInput = z.infer<typeof updateTaskSchema>;
 
 export const bulkUpdateSchema = z.object({

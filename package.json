@@ -9,6 +9,7 @@
     "infra:down": "docker compose down",
     "dev:api": "npm run dev -w @central-partner/api",
     "test:api": "npm run test -w @central-partner/api",
+    "test:e2e": "npm run test -w @central-partner/e2e",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },
   "engines": {

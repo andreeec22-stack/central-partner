@@ -17,18 +17,22 @@ const server = serve({ fetch: app.fetch, port: env.PORT }, (info) => {
   logger.info('api listening', { port: info.port, env: env.NODE_ENV });
 });
 const io = attachSocketServer(server as HttpServer);
-// Each workspace gets its new week within a minute of Monday 00:00 local time.
-const stopScheduler = startWeekScheduler();
-// Scheduled surveys open within a minute of their start date.
-const stopSurveyScheduler = startSurveyScheduler();
-// Expired weekly reports (30 days) lose their file; checked hourly.
-const stopReportCleanup = startReportCleanup();
+
+const stopJobs: (() => void)[] = [];
+if (env.SCHEDULERS_ENABLED) {
+  // Each workspace gets its new week within a minute of Monday 00:00 local time.
+  stopJobs.push(startWeekScheduler());
+  // Scheduled surveys open within a minute of their start date.
+  stopJobs.push(startSurveyScheduler());
+  // Expired weekly reports (30 days) lose their file; checked hourly.
+  stopJobs.push(startReportCleanup());
+} else {
+  logger.info('schedulers disabled (SCHEDULERS_ENABLED=false)');
+}
 
 async function shutdown(signal: string) {
   logger.info('shutting down', { signal });
-  stopScheduler();
-  stopSurveyScheduler();
-  stopReportCleanup();
+  for (const stop of stopJobs) stop();
   await new Promise<void>((resolve) => io.close(() => resolve()));
   await Promise.allSettled([prisma.$disconnect(), closeRedis()]);
   process.exit(0);

@@ -14,7 +14,8 @@ import { PriorityLabel, ProgressPicker, SemaphoreDot, StatusControl } from './Ta
 
 function useTaskActions() {
   const update = useUpdateTask();
-  return (task: Task, patch: TaskPatch) => update.mutate({ id: task.id, patch });
+  // Based on the version on screen: if someone saved since, the API answers 409.
+  return (task: Task, patch: TaskPatch) => update.mutate({ id: task.id, patch: { ...patch, expectedUpdatedAt: task.updatedAt } });
 }
 
 // Saturday's "resultado real" for the KPI.

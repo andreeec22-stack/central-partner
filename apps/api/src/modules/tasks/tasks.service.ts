@@ -455,15 +455,24 @@ export async function createTask(user: AuthUser, input: CreateTaskInput, ctx: Cl
   return { task: payload };
 }
 
-export async function updateTask(user: AuthUser, id: string, patch: UpdateTaskInput, ctx: ClientContext) {
+export async function updateTask(user: AuthUser, id: string, input: UpdateTaskInput, ctx: ClientContext) {
+  const { expectedUpdatedAt, ...patch } = input;
   const scope = await departmentScope(user);
   // A new date may move the task to another (open) week.
   const targetWeek = patch.dueDate ? await weekForTask(user.workspaceId, user.workspaceTimezone, patch.dueDate, user.id) : null;
   const result = await prisma.$transaction(async (tx) => {
     const op: OpContext = { tx, user, scope, now: new Date(), memo: new Map() };
+    // Concurrent saves of the same task queue here, so the version check below
+    // sees the committed result of the previous one.
+    if (expectedUpdatedAt) await tx.$executeRaw`SELECT 1 FROM tasks WHERE id = ${id}::uuid FOR UPDATE`;
     const task = await findVisibleTask(tx, user, scope, id);
     if (!canEditTask(user, task)) throw forbidden('You can only edit tasks assigned to you or that you created');
     await assertWeekOpen(tx, task.weekId);
+    if (expectedUpdatedAt && task.updatedAt.getTime() !== expectedUpdatedAt.getTime()) {
+      throw new AppError(409, 'TASK_CONFLICT', 'Otra persona cambió esta tarea mientras la editabas; recarga para ver su versión', {
+        updatedAt: task.updatedAt,
+      });
+    }
 
     const plan = await planUpdate(op, task, patch, targetWeek?.id);
     if (Object.keys(plan.changes).length === 0) {

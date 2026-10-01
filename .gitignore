@@ -8,3 +8,8 @@ coverage/
 uploads/
 .DS_Store
 seed.ts.bak
+
+# Playwright
+apps/e2e/playwright-report/
+apps/e2e/test-results/
+apps/api/uploads-e2e/

@@ -113,6 +113,7 @@ export function CloseWeekModal({ week, onClose, onViewHistory }: { week: WeekRow
         </p>
       ) : report ? (
         <div className="space-y-3">
+          <p className="text-sm text-ink-soft">Al cerrar, el reporte Excel de la semana se generará automáticamente y quedará guardado 30 días en Reportes semanales.</p>
           {!report.canClose && (
             <p role="alert" className="flex items-start gap-2 rounded-lg bg-sem-yellow-soft px-3 py-2 text-sm">
               <TriangleAlert className="mt-0.5 size-4 shrink-0 text-sem-yellow" aria-hidden />

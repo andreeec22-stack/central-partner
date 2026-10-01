@@ -14,6 +14,12 @@ const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(3000),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
+  // Background jobs (weekly cycle, surveys, report cleanup). With several API
+  // replicas, leave them on in one; E2E turns them off for deterministic data.
+  SCHEDULERS_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
   APP_URL: z.string().url().default('http://localhost:5173'),
 
   DATABASE_URL: z.string().min(1),

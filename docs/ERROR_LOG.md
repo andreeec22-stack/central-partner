@@ -99,6 +99,35 @@ Módulo: `apps/api/src/modules/reports/`. Endpoints bajo `/api/v1/export`, todos
 | 2 | 2026-10-01 | El test esperaba las hojas de área en orden de creación (Marketing, Finanzas), pero el snapshot las ordena alfabéticamente | Se corrigió la expectativa; el orden alfabético es el mismo del dashboard | ✅ |
 | 3 | 2026-10-01 | Los tests que cierran semanas habrían escrito reportes en `apps/api/uploads/`, la carpeta de desarrollo | `tests/setup-env.ts` apunta `LOCAL_STORAGE_DIR` a una carpeta temporal | ✅ |
 
+---
+
+## Fase 3 · E2E con Playwright
+
+### E3.1 · TASK_CONFLICT (edición concurrente), funcionalidad nueva
+- **Tipo:** concurrencia · **HTTP:** 409 `TASK_CONFLICT`
+- **Trigger:** dos personas guardan la misma tarea partiendo de la misma versión.
+- **Prevención (optimista, gana el primero; decisión del usuario):**
+  - El cliente envía `expectedUpdatedAt`. El servidor bloquea la fila
+    (`SELECT … FOR UPDATE`) y compara la versión (`tasks.service.ts → updateTask`).
+  - Los campos de texto toman la versión **al empezar a editar**, para que un refresco por
+    socket a mitad de la edición no la "actualice" y pise el cambio ajeno.
+  - Los guardados del cliente se serializan, y una edición propia anterior no cuenta como
+    conflicto (`lib/queries.ts → ownSaves`).
+- **Compatibilidad:** sin `expectedUpdatedAt` se comporta como antes.
+- **Tests:** `apps/api/tests/integration/conflicts.test.ts` (versión vieja, carrera
+  simultánea, compatibilidad) y `apps/e2e/tests/conflicts.spec.ts` (diálogo, recargar,
+  clics rápidos).
+
+### Errores encontrados al implementar la Fase 3
+
+| # | Fecha | Descripción | Solución | Estado |
+|---|---|---|---|---|
+| 4 | 2026-10-01 | `npm install` fallaba con `Invalid Version:`: el `package-lock.json` tenía una entrada `apps/web/node_modules/@vitejs/plugin-react` sin versión, que apuntaba a una carpeta sin `package.json`, resto de una instalación anterior | Se borraron la carpeta y la entrada; la versión real (6.1.1) está en la raíz | ✅ |
+| 5 | 2026-10-01 | El prompt decía que Playwright "ya está en package.json"; no lo estaba | Workspace `apps/e2e` con `@playwright/test` 1.63 y Chromium | ✅ |
+| 6 | 2026-10-01 | **E2E intermitente.** Al recargar el seed, el scheduler de la API creaba la semana actual del workspace recién creado antes que el seed, que fallaba con `Unique constraint (workspaceId, mondayDate)`; una vez dejó las consultas colgadas. **También afectaba a correr `db:seed` con la API de desarrollo encendida.** | El seed reutiliza la semana si ya existe y reemplaza sus definiciones. Nueva variable `SCHEDULERS_ENABLED` (por defecto `true`), en `false` para E2E; también sirve para dejar los schedulers en una sola réplica en producción. Tres corridas completas seguidas sin fallos | ✅ |
+| 7 | 2026-10-01 | El lector del seed se llama "Lector", igual que su rol: un selector del test era ambiguo | Se ajustó el test | ✅ |
+| 8 | 2026-10-01 | Ruido `[vite] ws proxy error: write ECONNABORTED` en la salida de E2E | Es el logger interno de Vite al cerrar pestañas con el socket abierto; inofensivo. Se intentó filtrar con un handler del proxy, no tuvo efecto y se revirtió | ⚪ Documentado |
+
 ## Errores de entorno conocidos
 
 | # | Fecha | Descripción | Mitigación |

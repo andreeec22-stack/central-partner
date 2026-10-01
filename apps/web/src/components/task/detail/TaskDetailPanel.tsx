@@ -37,9 +37,12 @@ function EditableText({
   label,
   className,
   maxLength = 255,
+  version,
 }: {
   value: string | null;
-  onSave: (v: string | null) => void;
+  // `base` = the task version when editing started (conflict detection).
+  onSave: (v: string | null, base?: string) => void;
+  version?: string;
   multiline?: boolean;
   placeholder: string;
   label: string;
@@ -48,10 +51,11 @@ function EditableText({
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value ?? '');
+  const [base, setBase] = useState<string | undefined>(undefined);
   const commit = () => {
     setEditing(false);
     const next = draft.trim() || null;
-    if (next !== (value ?? null)) onSave(next);
+    if (next !== (value ?? null)) onSave(next, base);
   };
   if (!editing) {
     return (
@@ -59,6 +63,7 @@ function EditableText({
         type="button"
         onClick={() => {
           setDraft(value ?? '');
+          setBase(version);
           setEditing(true);
         }}
         className={clsx('group w-full rounded-md px-1 py-0.5 text-left hover:bg-sunken', className)}
@@ -94,7 +99,7 @@ function EditableText({
   );
 }
 
-function Header({ task, canEdit, update }: { task: Task; canEdit: boolean; update: (p: TaskPatch) => void }) {
+function Header({ task, canEdit, update }: { task: Task; canEdit: boolean; update: (p: TaskPatch, base?: string) => void }) {
   const blocked = task.status === 'BLOCKED';
   return (
     <div className="space-y-3">
@@ -103,7 +108,7 @@ function Header({ task, canEdit, update }: { task: Task; canEdit: boolean; updat
           <SemaphoreDot value={task.semaphore} blocked={blocked} />
         </div>
         <div className="min-w-0 flex-1 text-lg font-extrabold leading-snug tracking-tight">
-          {canEdit ? <EditableText label="título" value={task.title} placeholder="Sin título" onSave={(t) => t && update({ title: t })} /> : <h2 className="px-1">{task.title}</h2>}
+          {canEdit ? <EditableText label="título" value={task.title} version={task.updatedAt} placeholder="Sin título" onSave={(t, base) => t && update({ title: t }, base)} /> : <h2 className="px-1">{task.title}</h2>}
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-3 pl-6">
@@ -119,7 +124,7 @@ function Header({ task, canEdit, update }: { task: Task; canEdit: boolean; updat
   );
 }
 
-function Properties({ detail, update }: { detail: TaskDetail; update: (p: TaskPatch) => void }) {
+function Properties({ detail, update }: { detail: TaskDetail; update: (p: TaskPatch, base?: string) => void }) {
   const user = useAuth((s) => s.user)!;
   const { task, permissions } = detail;
   const manager = isManagerOf(user, task);
@@ -190,14 +195,14 @@ function Properties({ detail, update }: { detail: TaskDetail; update: (p: TaskPa
       </Property>
       <Property label="Meta KPI" icon={<Target className="size-3.5" aria-hidden />}>
         {manager && permissions.canEdit ? (
-          <EditableText label="meta KPI" value={task.kpiTarget} placeholder="Sin meta" onSave={(kpiTarget) => update({ kpiTarget })} />
+          <EditableText label="meta KPI" value={task.kpiTarget} version={task.updatedAt} placeholder="Sin meta" onSave={(kpiTarget, base) => update({ kpiTarget }, base)} />
         ) : (
           <span>{task.kpiTarget ?? <span className="text-muted">—</span>}</span>
         )}
       </Property>
       <Property label="Resultado KPI">
         {permissions.canEdit ? (
-          <EditableText label="resultado KPI" value={task.kpiActual} placeholder="Sin registrar" onSave={(kpiActual) => update({ kpiActual })} />
+          <EditableText label="resultado KPI" value={task.kpiActual} version={task.updatedAt} placeholder="Sin registrar" onSave={(kpiActual, base) => update({ kpiActual }, base)} />
         ) : (
           <span>{task.kpiActual ?? <span className="text-muted">Sin registrar</span>}</span>
         )}
@@ -209,7 +214,8 @@ function Properties({ detail, update }: { detail: TaskDetail; update: (p: TaskPa
 function PanelBody({ detail }: { detail: TaskDetail }) {
   const { task, permissions } = detail;
   const updateTask = useUpdateTask();
-  const update = (patch: TaskPatch) => updateTask.mutate({ id: task.id, patch });
+  // Text edits pass the version they started from; quick controls use the one on screen.
+  const update = (patch: TaskPatch, base?: string) => updateTask.mutate({ id: task.id, patch: { ...patch, expectedUpdatedAt: base ?? task.updatedAt } });
   const people = useMentionable(task.id, true);
   const names = useMemo(() => new Map((people.data ?? []).map((p) => [p.id, p.displayName])), [people.data]);
 
@@ -221,7 +227,7 @@ function PanelBody({ detail }: { detail: TaskDetail }) {
       <section aria-label="Descripción" className="space-y-1.5">
         <h3 className="text-sm font-bold">Descripción</h3>
         {permissions.canEdit ? (
-          <EditableText multiline label="descripción" maxLength={10_000} value={task.description} placeholder="Añade contexto para el equipo…" onSave={(description) => update({ description })} className="text-sm" />
+          <EditableText multiline label="descripción" maxLength={10_000} value={task.description} version={task.updatedAt} placeholder="Añade contexto para el equipo…" onSave={(description, base) => update({ description }, base)} className="text-sm" />
         ) : (
           <p className="whitespace-pre-wrap text-sm text-ink-soft">{task.description ?? 'Sin descripción.'}</p>
         )}
