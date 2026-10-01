@@ -62,6 +62,12 @@ export const ActivityAction = {
   SURVEY_CANCELLED: 'SURVEY_CANCELLED',
   PERFORMANCE_REVIEW_UPDATED: 'PERFORMANCE_REVIEW_UPDATED',
   PERFORMANCE_REVIEW_PUBLISHED: 'PERFORMANCE_REVIEW_PUBLISHED',
+  // CR-04: a published result changed; `changes` holds the before/after.
+  PERFORMANCE_REVIEW_RECALCULATED: 'PERFORMANCE_REVIEW_RECALCULATED',
+  OKR_CREATED: 'OKR_CREATED',
+  OKR_UPDATED: 'OKR_UPDATED',
+  OKR_DELETED: 'OKR_DELETED',
+  OKR_CHECKED_IN: 'OKR_CHECKED_IN',
 } as const;
 export type ActivityAction = (typeof ActivityAction)[keyof typeof ActivityAction];
 

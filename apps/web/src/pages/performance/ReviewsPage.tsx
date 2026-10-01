@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { Link } from 'react-router';
 import { AdminTable, Pagination, td, th } from '../../components/admin/AdminKit';
 import { periodLabel, RatingBadge, recentPeriods, Score } from '../../components/performance/PerfBits';
+import { PerfNav } from '../../components/performance/PerfNav';
 import { EmptyState, ErrorNotice, Skeleton } from '../../components/ui/Feedback';
 import { Select } from '../../components/ui/Field';
 import { SURVEYS_PAGE_SIZE, useReviews } from '../../lib/performance';
@@ -48,6 +49,8 @@ export default function ReviewsPage() {
           </Select>
         </label>
       </div>
+
+      <PerfNav />
 
       {q.isPending ? (
         <Skeleton className="h-48" />

@@ -68,4 +68,5 @@ export const reviewRoutes = new Hono<AppEnv>()
     const id = reviewId(c);
     return c.json(await reviews.updateReview(c.get('user'), id, await parseJson(c, updateReviewSchema), clientContext(c)));
   })
-  .post('/:id/publish', requireRole('ADMIN', 'JEFE_AREA'), async (c) => c.json(await reviews.publishReview(c.get('user'), reviewId(c), clientContext(c))));
+  .post('/:id/publish', requireRole('ADMIN', 'JEFE_AREA'), async (c) => c.json(await reviews.publishReview(c.get('user'), reviewId(c), clientContext(c))))
+  .post('/:id/recalculate', requireRole('ADMIN', 'JEFE_AREA'), async (c) => c.json(await reviews.recalculateReview(c.get('user'), reviewId(c))));

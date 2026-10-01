@@ -39,7 +39,8 @@ export type ServerEvent =
   | 'task:observation'
   | 'permissions:updated'
   | 'survey:changed'
-  | 'review:changed';
+  | 'review:changed'
+  | 'okr:changed';
 
 let io: Server | null = null;
 

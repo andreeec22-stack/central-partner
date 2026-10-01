@@ -8,7 +8,8 @@ import { ErrorNotice, Spinner } from '../../components/ui/Feedback';
 import { Field, Input, Textarea } from '../../components/ui/Field';
 import { ApiError } from '../../lib/api';
 import { formatDate } from '../../lib/format';
-import { usePublishReview, useReview, useUpdateReview, type PerformanceReview } from '../../lib/performance';
+import { usePublishReview, useRecalculateReview, useReview, useUpdateReview, type PerformanceReview } from '../../lib/performance';
+import { OkrProgressBar, OkrStatusBadge } from '../../components/okrs/OkrBits';
 import { useAuth } from '../../stores/auth';
 import { toast } from '../../stores/toast';
 
@@ -102,6 +103,7 @@ export default function ReviewDetailPage() {
   const tz = useAuth((s) => s.user?.timezone) ?? 'America/Lima';
   const q = useReview(reviewId);
   const publish = usePublishReview(reviewId);
+  const recalc = useRecalculateReview(reviewId);
   const [confirm, setConfirm] = useState(false);
   const [formKey, setFormKey] = useState(0);
   useEffect(() => setFormKey((k) => k + 1), [q.data?.review.updatedAt]);
@@ -126,10 +128,20 @@ export default function ReviewDetailPage() {
           <h1 className="mt-1 text-2xl font-extrabold tracking-tight">{r.user.displayName}</h1>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <RatingBadge rating={r.performanceRating} />
+            {r.lastRecalculatedAt && (
+              <span className="rounded-full bg-sem-yellow-soft px-2 py-0.5 text-xs font-semibold" title="Cambió después de publicarse; el antes y después está en Auditoría">
+                Recalculado el {formatDate(r.lastRecalculatedAt, tz)}
+              </span>
+            )}
             {r.riskLevel && <span className="text-xs font-semibold text-muted">Riesgo {RISK_LABEL[r.riskLevel].toLowerCase()}</span>}
             <span className="text-xs text-muted">{r.publishedAt ? `Publicado el ${formatDate(r.publishedAt, tz)}` : 'Borrador: la persona aún no lo ve'}</span>
           </div>
         </div>
+        {r.permissions.canEdit && (
+          <Button variant="secondary" loading={recalc.isPending} onClick={() => recalc.mutate()}>
+            Recalcular
+          </Button>
+        )}
         {r.permissions.canPublish && (
           <Button icon={<Megaphone className="size-4" aria-hidden />} onClick={() => setConfirm(true)}>
             Publicar a {r.user.displayName}
@@ -144,6 +156,25 @@ export default function ReviewDetailPage() {
         <ScoreCard label="Encuestas" value={r.overallPerformanceScore} hint={`${r.surveysCompleted} de ${r.surveysInitiated} enviadas`} />
         <ScoreCard label="Productividad" value={r.overallProductivityIndex} hint="Tareas a tiempo y KPIs" />
       </section>
+
+      {q.data.okrs.length > 0 && (
+        <section aria-labelledby="okrs" className="rounded-2xl border border-line bg-surface p-5 shadow-card">
+          <h2 id="okrs" className="font-bold">
+            Objetivos del trimestre
+          </h2>
+          <ul className="mt-3 space-y-3">
+            {q.data.okrs.map((o) => (
+              <li key={o.id}>
+                <div className="flex items-center justify-between gap-2 text-sm">
+                  <span>{o.title}</span>
+                  <OkrStatusBadge status={o.status} />
+                </div>
+                <OkrProgressBar progress={o.progress} status={o.status} label={`Avance de ${o.title}`} />
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <section aria-labelledby="evals" className="rounded-2xl border border-line bg-surface p-5 shadow-card">
         <h2 id="evals" className="font-bold">

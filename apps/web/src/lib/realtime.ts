@@ -79,8 +79,9 @@ export function useRealtime(): ConnectionState {
       invalidate('notifications');
     });
     // Surveys and reviews: lists, dashboard and the open survey refetch.
-    socket.on('survey:changed', () => invalidate('surveys', 'reviews'));
-    socket.on('review:changed', () => invalidate('reviews', 'surveys'));
+    socket.on('survey:changed', () => invalidate('surveys', 'reviews', 'scorecard'));
+    socket.on('review:changed', () => invalidate('reviews', 'surveys', 'scorecard'));
+    socket.on('okr:changed', () => invalidate('okrs', 'scorecard'));
     socket.on('permissions:updated', () => {
       void useAuth.getState().refreshMe();
       invalidate('tasks', 'dashboard', 'departments', 'users');

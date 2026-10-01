@@ -110,6 +110,9 @@ export interface PerformanceReview {
   developmentGoals: string[];
   nextReviewDate: string | null;
   publishedAt: string | null;
+  // CR-04: the result changed after it was published.
+  lastRecalculatedAt: string | null;
+  recalculationCount: number;
   updatedAt: string;
   permissions: { canEdit: boolean; canPublish: boolean; canComment: boolean };
 }
@@ -304,7 +307,11 @@ export interface ReviewSurvey {
 export function useReview(id: string) {
   return useQuery({
     queryKey: perfKeys.review(id),
-    queryFn: ({ signal }) => api<{ review: PerformanceReview; surveys: ReviewSurvey[] }>(`/performance-reviews/${id}`, { signal }),
+    queryFn: ({ signal }) =>
+      api<{ review: PerformanceReview; surveys: ReviewSurvey[]; okrs: { id: string; title: string; progress: number; status: 'ON_TRACK' | 'AT_RISK' | 'OFF_TRACK' | 'COMPLETED' }[] }>(
+        `/performance-reviews/${id}`,
+        { signal },
+      ),
   });
 }
 
@@ -330,5 +337,17 @@ export function usePublishReview(id: string) {
       void qc.invalidateQueries({ queryKey: ['surveys'] });
     },
     onError: failed('No se pudo publicar'),
+  });
+}
+
+export function useRecalculateReview(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api<{ review: PerformanceReview; recalculated: boolean }>(`/performance-reviews/${id}/recalculate`, { method: 'POST' }),
+    onSuccess: ({ recalculated }) => {
+      toast.success(recalculated ? 'Resultado recalculado' : 'El resultado ya estaba al día');
+      void qc.invalidateQueries({ queryKey: perfKeys.reviews });
+    },
+    onError: failed('No se pudo recalcular'),
   });
 }

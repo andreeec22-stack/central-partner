@@ -22,6 +22,8 @@ const PerformancePage = lazy(() => import('./pages/performance/PerformancePage')
 const SurveyResponsePage = lazy(() => import('./pages/performance/surveys/SurveyResponsePage'));
 const ReviewsPage = lazy(() => import('./pages/performance/ReviewsPage'));
 const ReviewDetailPage = lazy(() => import('./pages/performance/ReviewDetailPage'));
+const ScorecardPage = lazy(() => import('./pages/performance/ScorecardPage'));
+const OkrsPage = lazy(() => import('./pages/performance/OkrsPage'));
 
 function FullScreenSpinner() {
   return (
@@ -49,6 +51,12 @@ function RequireAdmin() {
 function RequireContributor() {
   const role = useAuth((s) => s.user?.role);
   return role && role !== 'VIEWER' ? <Outlet /> : <Navigate to="/" replace />;
+}
+
+// The performance dashboard: director and area heads.
+function RequireManager() {
+  const role = useAuth((s) => s.user?.role);
+  return role === 'ADMIN' || role === 'JEFE_AREA' ? <Outlet /> : <Navigate to="/performance" replace />;
 }
 
 // Sign-in screens bounce signed-in users to the app.
@@ -96,6 +104,8 @@ export const router = createBrowserRouter([
               { path: '/performance/surveys/:surveyId', element: page(<SurveyResponsePage />) },
               { path: '/performance/reviews', element: page(<ReviewsPage />) },
               { path: '/performance/reviews/:reviewId', element: page(<ReviewDetailPage />) },
+              { path: '/performance/okrs', element: page(<OkrsPage />) },
+              { element: <RequireManager />, children: [{ path: '/performance/dashboard', element: page(<ScorecardPage />) }] },
             ],
           },
           {

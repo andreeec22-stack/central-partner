@@ -32,6 +32,8 @@ export interface Department {
   color: string | null;
   description: string | null;
   headId: string | null;
+  // Scorecard goal 0–100; null = default 80.
+  performanceTarget?: number | null;
   head?: { id: string; displayName: string } | null;
   usersCount: number;
 }

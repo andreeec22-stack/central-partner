@@ -12,6 +12,7 @@ import { prisma as appPrisma } from '../src/lib/prisma';
 import { getPerformanceMetrics } from '../src/modules/performance/performance.service';
 import { upsertPerformanceReview } from '../src/modules/surveys/reviews.service';
 import { calculateDualScore, calculatePerformanceScore, reviewPeriodOf } from '../src/modules/surveys/scoring';
+import { okrProgress } from '../src/modules/okrs/okr-progress';
 
 export const DEMO_PASSWORD = 'demo-12345';
 const SLUG = 'demo-central-partner';
@@ -368,7 +369,7 @@ async function main() {
   const priorities = ['Comunicación', 'Liderazgo', 'Gestión del tiempo', 'Técnica'];
   await evaluation('SELF_ASSESSMENT', luis, luis.id, [5, 4, 6, 85, priorities, 'Duplicamos la respuesta a mensajes en menos de 2 horas.'], { submit: true });
   await evaluation('MANAGER_REVIEW', luis, jefeCom.id, [4, 3, 6, 78, null, 'Muy buen trato con la comunidad; mejorar reportes a tiempo.'], { submit: true });
-  const review = await upsertPerformanceReview(ws.id, luis.id, period, prisma);
+  const { review } = await upsertPerformanceReview(ws.id, luis.id, period, prisma);
   await prisma.performanceReview.update({
     where: { id: review!.id },
     data: {
@@ -383,6 +384,74 @@ async function main() {
   await evaluation('SELF_ASSESSMENT', ana, ana.id, [4, 3]);
   await evaluation('MANAGER_REVIEW', ana, jefeMkt.id, []);
   await evaluation('SELF_ASSESSMENT', carla, carla.id, [], { startsInDays: 2 });
+
+  // OKRs of the quarter: company → Marketing → Ana, with one check-in; and a
+  // stricter performance goal for Marketing on the scorecard.
+  await prisma.department.update({ where: { id: marketing.id }, data: { performanceTarget: 85 } });
+  const okr = async (data: {
+    level: 'COMPANY' | 'AREA' | 'PERSON';
+    title: string;
+    parentId?: string;
+    departmentId?: string;
+    ownerUserId?: string;
+    by: string;
+    krs: { title: string; unit?: string; startValue?: number; target: number; current: number }[];
+  }) => {
+    const progress = okrProgress(data.krs.map((k) => ({ startValue: k.startValue ?? 0, target: k.target, current: k.current })));
+    return prisma.okr.create({
+      data: {
+        workspaceId: ws.id,
+        period,
+        level: data.level,
+        parentId: data.parentId ?? null,
+        departmentId: data.departmentId ?? null,
+        ownerUserId: data.ownerUserId ?? null,
+        title: data.title,
+        progress,
+        createdById: data.by,
+        keyResults: { create: data.krs.map((k, order) => ({ order, title: k.title, unit: k.unit ?? null, startValue: k.startValue ?? 0, target: k.target, current: k.current })) },
+      },
+    });
+  };
+  const growth = await okr({
+    level: 'COMPANY',
+    title: 'Crecer las ventas 10% este trimestre',
+    by: director.id,
+    krs: [
+      { title: 'Ventas del trimestre', unit: '%', target: 10, current: 6 },
+      { title: 'Clientes recurrentes', unit: 'clientes', startValue: 120, target: 150, current: 138 },
+    ],
+  });
+  await okr({
+    level: 'COMPANY',
+    title: 'Reducir rotación de personal',
+    by: director.id,
+    krs: [{ title: 'Rotación mensual', unit: '%', startValue: 6, target: 3, current: 5 }],
+  });
+  const mktOkr = await okr({
+    level: 'AREA',
+    title: 'Generar más demanda desde redes',
+    parentId: growth.id,
+    departmentId: marketing.id,
+    by: jefeMkt.id,
+    krs: [
+      { title: 'Leads calificados', unit: 'leads', target: 300, current: 140 },
+      { title: 'Campañas publicadas', unit: 'campañas', target: 6, current: 3 },
+    ],
+  });
+  const anaOkr = await okr({
+    level: 'PERSON',
+    title: 'Publicar contenido constante',
+    parentId: mktOkr.id,
+    departmentId: marketing.id,
+    ownerUserId: ana.id,
+    by: jefeMkt.id,
+    krs: [{ title: 'Posts publicados', unit: 'posts', target: 40, current: 18 }],
+  });
+  const anaKr = await prisma.keyResult.findFirstOrThrow({ where: { okrId: anaOkr.id } });
+  await prisma.okrCheckIn.create({
+    data: { okrId: anaOkr.id, authorId: ana.id, progress: anaOkr.progress, values: [{ keyResultId: anaKr.id, previous: 12, current: 18 }], notes: 'Retomé el calendario editorial.' },
+  });
 
   // So the Auditoría page starts with the workspace's origin.
   await prisma.activityLog.createMany({

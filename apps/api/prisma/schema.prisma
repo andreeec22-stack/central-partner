@@ -116,6 +116,8 @@ enum NotificationType {
   WEEK_STARTED
   // An evaluation to fill (self-assessment or manager review).
   SURVEY_ASSIGNED
+  // A published performance review changed because another survey of its quarter arrived (CR-04).
+  RESULT_RECALCULATED
 }
 
 // ─── Workspace & branding ───────────────────────────────────────────────────
@@ -161,6 +163,7 @@ model Workspace {
   surveyTemplates      SurveyTemplate[]
   surveys              Survey[]
   performanceReviews   PerformanceReview[]
+  okrs                 Okr[]
 
   @@map("workspaces")
 }
@@ -196,6 +199,8 @@ model Department {
   color       String?   @db.VarChar(7)
   description String?   @db.VarChar(500)
   headId      String?   @db.Uuid
+  // Performance goal of the area for the scorecard (0–100); null = the default 80.
+  performanceTarget Int?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   deletedAt   DateTime?
@@ -211,6 +216,7 @@ model Department {
   functions   DepartmentFunction[]
   surveys     Survey[]
   reviews     PerformanceReview[]
+  okrs        Okr[]
 
   @@unique([workspaceId, slug])
   @@index([workspaceId, deletedAt])
@@ -265,6 +271,9 @@ model User {
   surveyResponses      SurveyResponse[]
   performanceReviews   PerformanceReview[]          @relation("ReviewSubject")
   reviewsPublished     PerformanceReview[]          @relation("ReviewPublisher")
+  okrsOwned            Okr[]                        @relation("OkrOwner")
+  okrsCreated          Okr[]                        @relation("OkrCreator")
+  okrCheckIns          OkrCheckIn[]
 
   @@unique([workspaceId, email])
   @@index([email])
@@ -1016,6 +1025,11 @@ model PerformanceReview {
   nextReviewDate           DateTime?         @db.Date
   publishedAt              DateTime?
   publishedById            String?           @db.Uuid
+  // CR-04: the scores changed after publication (another survey of the quarter
+  // was submitted). The before/after of each change is in ActivityLog
+  // (PERFORMANCE_REVIEW_RECALCULATED).
+  lastRecalculatedAt       DateTime?
+  recalculationCount       Int               @default(0)
   createdAt                DateTime          @default(now())
   updatedAt                DateTime          @updatedAt
 
@@ -1030,4 +1044,93 @@ model PerformanceReview {
   @@index([departmentId])
   @@index([publishedById])
   @@map("performance_reviews")
+}
+
+// ─── Objectives & key results (Phase 2) ─────────────────────────────────────
+// Quarterly OKRs in a cascade: COMPANY → AREA (a department) → PERSON. Progress
+// is the mean of its key results' progress, stored on every change; the status
+// (on track / at risk / off track) depends on the date too, so it is derived on
+// read from progress vs. the time elapsed in the quarter (see okrs/okr-progress.ts).
+
+enum OkrLevel {
+  COMPANY
+  AREA
+  PERSON
+}
+
+model Okr {
+  id           String    @id @default(uuid()) @db.Uuid
+  workspaceId  String    @db.Uuid
+  // "2026-Q4"
+  period       String    @db.VarChar(7)
+  level        OkrLevel
+  parentId     String?   @db.Uuid
+  // AREA: the area. PERSON: the person's area when created.
+  departmentId String?   @db.Uuid
+  // PERSON only.
+  ownerUserId  String?   @db.Uuid
+  title        String    @db.VarChar(200)
+  description  String?   @db.VarChar(2000)
+  // Optional; the quarter's last day otherwise.
+  deadline     DateTime? @db.Date
+  // 0–100, mean of the key results.
+  progress     Float     @default(0)
+  completedAt  DateTime?
+  createdById  String    @db.Uuid
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  workspace  Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  parent     Okr?         @relation("OkrCascade", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  children   Okr[]        @relation("OkrCascade")
+  department Department?  @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  owner      User?        @relation("OkrOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
+  createdBy  User         @relation("OkrCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  keyResults KeyResult[]
+  checkIns   OkrCheckIn[]
+
+  @@index([workspaceId, period, level])
+  @@index([parentId])
+  @@index([departmentId, period])
+  @@index([ownerUserId, period])
+  @@index([createdById])
+  @@map("okrs")
+}
+
+model KeyResult {
+  id         String   @id @default(uuid()) @db.Uuid
+  okrId      String   @db.Uuid
+  order      Int
+  title      String   @db.VarChar(200)
+  unit       String?  @db.VarChar(20)
+  // Progress = (current − start) / (target − start); target < start means "lower is better".
+  startValue Float    @default(0)
+  target     Float
+  current    Float    @default(0)
+  updatedAt  DateTime @updatedAt
+
+  okr Okr @relation(fields: [okrId], references: [id], onDelete: Cascade)
+
+  @@index([okrId, order])
+  @@map("key_results")
+}
+
+// A weekly progress update: the key results' new values plus notes, with the
+// progress it produced (so the history can be charted).
+model OkrCheckIn {
+  id        String   @id @default(uuid()) @db.Uuid
+  okrId     String   @db.Uuid
+  authorId  String   @db.Uuid
+  progress  Float
+  // [{ keyResultId, previous, current }]
+  values    Json
+  notes     String?  @db.VarChar(2000)
+  createdAt DateTime @default(now())
+
+  okr    Okr  @relation(fields: [okrId], references: [id], onDelete: Cascade)
+  author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([okrId, createdAt])
+  @@index([authorId])
+  @@map("okr_check_ins")
 }

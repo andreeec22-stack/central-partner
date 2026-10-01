@@ -10,7 +10,11 @@ import type { ClientContext } from '../auth/auth.service';
 import { aggregateReview } from './scoring';
 import { canManageEvaluationsOf, checkReviewAccess, reviewVisibilityFilter, surveyVisibilityFilter } from './surveys.access';
 import { invalidateSurveyDashboards } from './surveys.dashboard';
+import { invalidateScorecard } from '../scorecard/scorecard.service';
+import { okrStatus } from '../okrs/okr-progress';
+import { dateToDay, localDay } from '../../lib/week';
 import type { UpdateReviewInput } from './surveys.schemas';
+import { notifySafely } from '../notifications/notify.service';
 
 // PerformanceReview = one person's quarter, the AGGREGATE of their completed
 // surveys (scoring.ts explains Survey.dualScore → overallDualScore). It is
@@ -18,11 +22,36 @@ import type { UpdateReviewInput } from './surveys.schemas';
 // can't drift from them; the managers' texts (comments, strengths, goals) and
 // the publication are the only hand-written parts.
 
+// The fields a person sees as "their result": a change in any of them after
+// publication is a recalculation (CR-04).
+const RESULT_FIELDS = [
+  'overallDualScore',
+  'overallPerformanceScore',
+  'overallProductivityIndex',
+  'selfAssessmentScore',
+  'managerReviewScore',
+  'performanceRating',
+  'riskLevel',
+  'surveysCompleted',
+] as const;
+
+export interface Recalculation {
+  changes: Record<string, { old: unknown; new: unknown }>;
+}
+
 /**
  * Recomputes the review of `userId` for `period` from their surveys.
  * No completed survey yet → no review (returns the existing one untouched, or null).
+ * When the review was already PUBLISHED and its result changes, it is stamped
+ * (lastRecalculatedAt, recalculationCount) and the change is returned so the
+ * caller can audit and notify after its transaction commits (see refreshReview).
  */
-export async function upsertPerformanceReview(workspaceId: string, userId: string, period: string, db: Tx = prisma) {
+export async function upsertPerformanceReview(
+  workspaceId: string,
+  userId: string,
+  period: string,
+  db: Tx = prisma,
+): Promise<{ review: PerformanceReview | null; recalculation: Recalculation | null }> {
   const surveys = await db.survey.findMany({
     where: { workspaceId, evaluatedUserId: userId, reviewPeriod: period, status: { not: 'CANCELLED' } },
     select: { type: true, status: true, productivityIndex: true, productivityData: true, performanceScore: true, dualScore: true, completedAt: true },
@@ -30,7 +59,8 @@ export async function upsertPerformanceReview(workspaceId: string, userId: strin
   const completed = surveys.filter((s) => s.status === 'COMPLETED');
   const existing = await db.performanceReview.findUnique({ where: { userId_reviewPeriod: { userId, reviewPeriod: period } } });
   if (completed.length === 0) {
-    return existing ? db.performanceReview.update({ where: { id: existing.id }, data: { surveysInitiated: surveys.length } }) : null;
+    const review = existing ? await db.performanceReview.update({ where: { id: existing.id }, data: { surveysInitiated: surveys.length } }) : null;
+    return { review, recalculation: null };
   }
 
   const subject = await db.user.findUnique({ where: { id: userId }, select: { departmentId: true } });
@@ -38,11 +68,80 @@ export async function upsertPerformanceReview(workspaceId: string, userId: strin
   const scores = { ...aggregateReview(completed), surveysInitiated: surveys.length };
   const performanceData = (latest.productivityData ?? undefined) as Prisma.InputJsonValue | undefined;
 
-  return db.performanceReview.upsert({
+  const changes = existing?.publishedAt ? diffFields(pick(existing), pick(scores)) : {};
+  const recalculated = Object.keys(changes).length > 0;
+
+  const review = await db.performanceReview.upsert({
     where: { userId_reviewPeriod: { userId, reviewPeriod: period } },
     create: { workspaceId, userId, reviewPeriod: period, departmentId: subject?.departmentId ?? null, performanceData, ...scores },
-    update: { performanceData, ...scores },
+    update: {
+      performanceData,
+      ...scores,
+      ...(recalculated ? { lastRecalculatedAt: new Date(), recalculationCount: { increment: 1 } } : {}),
+    },
   });
+  return { review, recalculation: recalculated ? { changes } : null };
+}
+
+function pick(source: object): Record<string, unknown> {
+  const s = source as Record<string, unknown>;
+  return Object.fromEntries(RESULT_FIELDS.map((f) => [f, s[f] ?? null]));
+}
+
+export interface RefreshTrigger {
+  actor: { id: string; displayName: string } | null;
+  reason: 'SURVEY_SUBMITTED' | 'SURVEY_CORRECTED' | 'SURVEY_CANCELLED' | 'SURVEY_CREATED' | 'MANUAL';
+  surveyId?: string;
+}
+
+// Who hears about a recalculated result: the heads of the person's area, or
+// the directors when the person is themselves a head (or has no area).
+async function reviewManagers(workspaceId: string, review: PerformanceReview) {
+  const subject = await prisma.user.findUnique({ where: { id: review.userId }, select: { role: true } });
+  const team = !!subject && subject.role !== 'JEFE_AREA' && subject.role !== 'ADMIN' && !!review.departmentId;
+  const managers = await prisma.user.findMany({
+    where: { workspaceId, deletedAt: null, ...(team ? { role: 'JEFE_AREA' as const, departmentId: review.departmentId } : { role: 'ADMIN' as const }) },
+    select: { id: true },
+  });
+  return managers.map((m) => m.id).filter((id) => id !== review.userId);
+}
+
+const pct = (v: unknown) => (typeof v === 'number' ? `${v.toFixed(1).replace('.', ',')}%` : '—');
+
+/**
+ * Recomputes a review and, when a published result changed (CR-04), records
+ * the before/after in the audit log (PERFORMANCE_REVIEW_RECALCULATED), tells
+ * the area's heads (RESULT_RECALCULATED notification) and pushes review:changed.
+ * Call it after the triggering transaction committed.
+ */
+export async function refreshReview(workspaceId: string, userId: string, period: string, trigger: RefreshTrigger) {
+  const { review, recalculation } = await upsertPerformanceReview(workspaceId, userId, period);
+  if (!review || !recalculation) return { review, recalculated: false };
+
+  const person = await prisma.user.findUnique({ where: { id: userId }, select: { displayName: true } });
+  await logActivity({
+    workspaceId,
+    userId: trigger.actor?.id ?? null,
+    action: ActivityAction.PERFORMANCE_REVIEW_RECALCULATED,
+    entityType: 'PerformanceReview',
+    entityId: review.id,
+    changes: recalculation.changes,
+    metadata: { subjectId: userId, period, reason: trigger.reason, surveyId: trigger.surveyId ?? null, recalculationCount: review.recalculationCount },
+  });
+  const dual = recalculation.changes.overallDualScore;
+  const recipients = await reviewManagers(workspaceId, review);
+  await notifySafely({
+    workspaceId,
+    recipientIds: recipients,
+    type: 'RESULT_RECALCULATED',
+    actor: trigger.actor,
+    title: `El resultado de ${person?.displayName ?? 'una persona'} fue recalculado`,
+    body: dual
+      ? `${period}: cambiaron sus evaluaciones. Puntaje combinado ${pct(dual.old)} → ${pct(dual.new)}.`
+      : `${period}: cambiaron las evaluaciones de un resultado ya publicado.`,
+  });
+  emitTo([rooms.admins(workspaceId), rooms.user(userId), ...recipients.map(rooms.user)], 'review:changed', { reviewId: review.id, userId, period });
+  return { review, recalculated: true };
 }
 
 const include = {
@@ -78,6 +177,8 @@ function present(user: AuthUser, r: ReviewRow) {
     nextReviewDate: r.nextReviewDate ? r.nextReviewDate.toISOString().slice(0, 10) : null,
     publishedAt: r.publishedAt,
     publishedBy: r.publishedBy,
+    lastRecalculatedAt: r.lastRecalculatedAt,
+    recalculationCount: r.recalculationCount,
     updatedAt: r.updatedAt,
     permissions: {
       canEdit: canManage,
@@ -124,7 +225,15 @@ export async function getReview(user: AuthUser, id: string) {
     },
     orderBy: { createdAt: 'asc' },
   });
-  return { review: present(user, r), surveys };
+  const today = localDay(new Date(), user.workspaceTimezone);
+  const okrs = (
+    await prisma.okr.findMany({
+      where: { workspaceId: user.workspaceId, level: 'PERSON', ownerUserId: r.userId, period: r.reviewPeriod },
+      select: { id: true, title: true, progress: true, period: true, deadline: true },
+      orderBy: { createdAt: 'asc' },
+    })
+  ).map((o) => ({ id: o.id, title: o.title, progress: o.progress, status: okrStatus(o.progress, o.period, o.deadline ? dateToDay(o.deadline) : null, today) }));
+  return { review: present(user, r), surveys, okrs };
 }
 
 const MANAGER_FIELDS = ['managerComments', 'strengths', 'areasForImprovement', 'developmentGoals', 'nextReviewDate'] as const;
@@ -181,6 +290,23 @@ export async function publishReview(user: AuthUser, id: string, ctx: ClientConte
     ipAddress: ctx.ipAddress,
   });
   await invalidateSurveyDashboards(user.workspaceId, r.reviewPeriod, r.departmentId);
+  await invalidateScorecard(user.workspaceId, r.reviewPeriod, r.departmentId);
   emitTo([rooms.user(r.userId), rooms.admins(user.workspaceId)], 'review:changed', { reviewId: id, userId: r.userId, period: r.reviewPeriod });
   return { review: present(user, updated) };
+}
+
+// POST /performance-reviews/:id/recalculate — rebuild from the surveys on demand
+// (e.g. after a scoring rule changes). Same notices as an automatic recalculation.
+export async function recalculateReview(user: AuthUser, id: string) {
+  const r = await findVisible(user, id);
+  if (!canManageEvaluationsOf(user, { id: r.userId, departmentId: r.departmentId, role: r.user.role })) {
+    throw forbidden('Solo el director o el jefe del área recalculan');
+  }
+  const { recalculated } = await refreshReview(user.workspaceId, r.userId, r.reviewPeriod, {
+    actor: { id: user.id, displayName: user.displayName },
+    reason: 'MANUAL',
+  });
+  await invalidateSurveyDashboards(user.workspaceId, r.reviewPeriod, r.departmentId);
+  await invalidateScorecard(user.workspaceId, r.reviewPeriod, r.departmentId);
+  return { review: present(user, await findVisible(user, id)), recalculated };
 }

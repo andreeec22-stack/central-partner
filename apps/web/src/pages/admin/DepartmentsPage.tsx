@@ -21,6 +21,7 @@ function DepartmentModal({ open, department, onClose }: { open: boolean; departm
   const [color, setColor] = useState('#2563EB');
   const [description, setDescription] = useState('');
   const [headId, setHeadId] = useState('');
+  const [target, setTarget] = useState('');
   const [touched, setTouched] = useState(false);
   const [nameTaken, setNameTaken] = useState(false);
 
@@ -30,6 +31,7 @@ function DepartmentModal({ open, department, onClose }: { open: boolean; departm
     setColor(department?.color ?? '#2563EB');
     setDescription(department?.description ?? '');
     setHeadId(department?.headId ?? '');
+    setTarget(department?.performanceTarget ? String(department.performanceTarget) : '');
     setTouched(false);
     setNameTaken(false);
   }, [open, department]);
@@ -41,12 +43,15 @@ function DepartmentModal({ open, department, onClose }: { open: boolean; departm
     .filter((u) => u.role !== 'VIEWER')
     .sort((a, b) => Number(b.role === 'JEFE_AREA') - Number(a.role === 'JEFE_AREA') || a.displayName.localeCompare(b.displayName));
 
+  const targetValue = target.trim() === '' ? null : Number(target);
+  const targetError = targetValue === null || (Number.isInteger(targetValue) && targetValue >= 1 && targetValue <= 100) ? undefined : 'Un entero entre 1 y 100';
+
   const submit = (e: FormEvent) => {
     e.preventDefault();
     setTouched(true);
-    if (nameError || colorError) return;
+    if (nameError || colorError || targetError) return;
     save.mutate(
-      { id: department?.id, input: { name: name.trim(), color: color.toUpperCase(), description: description.trim() || null, headId: headId || null } },
+      { id: department?.id, input: { name: name.trim(), color: color.toUpperCase(), description: description.trim() || null, headId: headId || null, performanceTarget: targetValue } },
       {
         onSuccess: () => {
           toast.success(department ? 'Departamento actualizado' : `Departamento "${name.trim()}" creado`);
@@ -115,6 +120,9 @@ function DepartmentModal({ open, department, onClose }: { open: boolean; departm
             )}
           </Field>
         </div>
+        <Field label="Meta de desempeño (%)" error={touched ? targetError : undefined} hint="Para el dashboard de desempeño. Vacío = 80%.">
+          {(id, d) => <Input id={id} aria-describedby={d} type="number" min={1} max={100} className="w-32" invalid={touched && !!targetError} value={target} onChange={(e) => setTarget(e.target.value)} />}
+        </Field>
         <Field label="Descripción (opcional)">
           {(id) => <Textarea id={id} maxLength={500} rows={3} value={description} onChange={(e) => setDescription(e.target.value)} />}
         </Field>

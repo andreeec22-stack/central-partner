@@ -134,6 +134,7 @@ export interface DepartmentInput {
   color: string | null;
   description: string | null;
   headId: string | null;
+  performanceTarget?: number | null;
 }
 
 export function useSaveDepartment() {

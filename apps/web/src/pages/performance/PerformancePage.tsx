@@ -4,6 +4,7 @@ import { Link } from 'react-router';
 import { AdminTable, ConfirmDialog, Pagination, td, th } from '../../components/admin/AdminKit';
 import { CreateSurveyModal } from '../../components/performance/CreateSurveyModal';
 import { periodLabel, recentPeriods, Score, SurveyStatusBadge, SURVEY_TYPE_LABEL } from '../../components/performance/PerfBits';
+import { PerfNav } from '../../components/performance/PerfNav';
 import { Button } from '../../components/ui/Button';
 import { EmptyState, ErrorNotice, Skeleton } from '../../components/ui/Feedback';
 import { Select } from '../../components/ui/Field';
@@ -268,6 +269,8 @@ export default function PerformancePage() {
           )}
         </div>
       </div>
+
+      <PerfNav />
 
       <MySurveys tz={tz} />
 

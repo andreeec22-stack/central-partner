@@ -70,6 +70,11 @@ export const ACTION_LABEL: Record<string, string> = {
   SURVEY_CANCELLED: 'Canceló evaluación',
   PERFORMANCE_REVIEW_UPDATED: 'Editó resultado de desempeño',
   PERFORMANCE_REVIEW_PUBLISHED: 'Publicó resultado de desempeño',
+  PERFORMANCE_REVIEW_RECALCULATED: 'Resultado publicado recalculado',
+  OKR_CREATED: 'Creó objetivo',
+  OKR_UPDATED: 'Editó objetivo',
+  OKR_DELETED: 'Eliminó objetivo',
+  OKR_CHECKED_IN: 'Registró avance de objetivo',
 };
 
 const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD');

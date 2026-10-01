@@ -18,6 +18,8 @@ const createSchema = z.object({
   headId: z.string().uuid().nullable().optional(),
   color: hexColor.nullable().optional(),
   description: z.string().trim().max(500).nullable().optional(),
+  // Scorecard goal (0–100); null = the default 80.
+  performanceTarget: z.number().int().min(1).max(100).nullable().optional(),
 });
 
 const updateSchema = createSchema.partial().refine((v) => Object.keys(v).length > 0, 'Nothing to update');
@@ -29,6 +31,7 @@ const publicSelect = {
   color: true,
   description: true,
   headId: true,
+  performanceTarget: true,
   head: { select: { id: true, displayName: true } },
   _count: { select: { members: { where: { deletedAt: null } } } },
 } as const;
@@ -40,6 +43,7 @@ type DepartmentRow = {
   color: string | null;
   description: string | null;
   headId: string | null;
+  performanceTarget: number | null;
   head: { id: string; displayName: string } | null;
   _count: { members: number };
 };
@@ -102,6 +106,7 @@ export const departmentRoutes = new Hono<AppEnv>()
           headId: input.headId ?? null,
           color: input.color ?? null,
           description: input.description ?? null,
+          performanceTarget: input.performanceTarget ?? null,
         },
         select: publicSelect,
       });

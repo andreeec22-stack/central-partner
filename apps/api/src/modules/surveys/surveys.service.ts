@@ -10,10 +10,11 @@ import { ActivityAction, logActivity } from '../audit/activity-log';
 import type { ClientContext } from '../auth/auth.service';
 import { notifySafely } from '../notifications/notify.service';
 import * as perf from '../performance/performance.service';
-import { upsertPerformanceReview } from './reviews.service';
+import { refreshReview, type RefreshTrigger } from './reviews.service';
 import { calculateDualScore, calculatePerformanceScore, reviewPeriodOf } from './scoring';
 import { canManageEvaluationsOf, checkSurveyAccess, surveyVisibilityFilter } from './surveys.access';
 import { invalidateSurveyDashboards } from './surveys.dashboard';
+import { invalidateScorecard } from '../scorecard/scorecard.service';
 import type { CreateSurveyInput, ListSurveysQuery, SaveResponsesInput } from './surveys.schemas';
 import {
   validateAnswerValue,
@@ -175,9 +176,15 @@ function broadcast(s: Pick<Survey, 'id' | 'workspaceId' | 'evaluatorId' | 'evalu
   });
 }
 
-async function afterStatusChange(s: Survey) {
-  await upsertPerformanceReview(s.workspaceId, s.evaluatedUserId, s.reviewPeriod);
+async function afterStatusChange(s: Survey, user: AuthUser, reason: RefreshTrigger['reason']) {
+  // CR-04: a published result that changes is audited and its area heads are told.
+  await refreshReview(s.workspaceId, s.evaluatedUserId, s.reviewPeriod, {
+    actor: { id: user.id, displayName: user.displayName },
+    reason,
+    surveyId: s.id,
+  });
   await invalidateSurveyDashboards(s.workspaceId, s.reviewPeriod, s.departmentId);
+  await invalidateScorecard(s.workspaceId, s.reviewPeriod, s.departmentId);
   broadcast(s);
 }
 
@@ -272,7 +279,7 @@ export async function createSurvey(user: AuthUser, input: CreateSurveyInput, ctx
     return created;
   });
 
-  await afterStatusChange(survey);
+  await afterStatusChange(survey, user, 'SURVEY_CREATED');
   await notifySafely({
     workspaceId: user.workspaceId,
     recipientIds: [evaluatorId],
@@ -385,7 +392,7 @@ export async function saveResponses(user: AuthUser, id: string, input: SaveRespo
     return tx.survey.update({ where: { id: s.id }, data });
   });
 
-  if (correcting || updated.status !== s.status) await afterStatusChange(updated);
+  if (correcting || updated.status !== s.status) await afterStatusChange(updated, user, correcting ? 'SURVEY_CORRECTED' : 'SURVEY_SUBMITTED');
   return { survey: presentDetail(user, await loadVisible(user, id)) };
 }
 
@@ -431,7 +438,7 @@ export async function submitSurvey(user: AuthUser, id: string, ctx: ClientContex
     return done;
   });
 
-  await afterStatusChange(updated);
+  await afterStatusChange(updated, user, 'SURVEY_SUBMITTED');
   return { survey: presentDetail(user, await loadVisible(user, id)) };
 }
 
@@ -457,7 +464,7 @@ export async function cancelSurvey(user: AuthUser, id: string, ctx: ClientContex
     );
     return done;
   });
-  await afterStatusChange(updated);
+  await afterStatusChange(updated, user, 'SURVEY_CANCELLED');
   return { survey: presentDetail(user, await loadVisible(user, id)) };
 }
 
