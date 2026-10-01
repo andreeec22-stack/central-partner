@@ -66,6 +66,9 @@ export class MemoryStorage {
   async get(key: string) {
     return this.objects.get(key)?.bytes ?? null;
   }
+  async delete(key: string) {
+    this.objects.delete(key);
+  }
   async signedUrl(key: string, opts: { filename: string; disposition: string }) {
     return `https://files.test/${encodeURIComponent(key)}?name=${encodeURIComponent(opts.filename)}&d=${opts.disposition}`;
   }

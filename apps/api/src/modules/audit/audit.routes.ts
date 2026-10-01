@@ -75,6 +75,12 @@ export const ACTION_LABEL: Record<string, string> = {
   OKR_UPDATED: 'Editó objetivo',
   OKR_DELETED: 'Eliminó objetivo',
   OKR_CHECKED_IN: 'Registró avance de objetivo',
+  REPORT_GENERATED: 'Generó reporte semanal',
+  REPORT_GENERATION_FAILED: 'Falló el reporte semanal',
+  REPORT_DOWNLOADED: 'Descargó reporte semanal',
+  REPORT_DELETED: 'Eliminó reporte semanal',
+  REPORT_RESTORED: 'Restauró reporte semanal',
+  REPORTS_PURGED: 'Reportes vencidos eliminados',
 };
 
 const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD');

@@ -8,6 +8,7 @@ import { closeRedis, getRedis } from './lib/redis';
 import { attachSocketServer } from './realtime/socket-server';
 import { startWeekScheduler } from './modules/weeks/weeks.service';
 import { startSurveyScheduler } from './modules/surveys/surveys.service';
+import { startReportCleanup } from './modules/reports/reports.service';
 
 const app = createApp();
 getRedis(); // start connecting early; the API works without it
@@ -20,11 +21,14 @@ const io = attachSocketServer(server as HttpServer);
 const stopScheduler = startWeekScheduler();
 // Scheduled surveys open within a minute of their start date.
 const stopSurveyScheduler = startSurveyScheduler();
+// Expired weekly reports (30 days) lose their file; checked hourly.
+const stopReportCleanup = startReportCleanup();
 
 async function shutdown(signal: string) {
   logger.info('shutting down', { signal });
   stopScheduler();
   stopSurveyScheduler();
+  stopReportCleanup();
   await new Promise<void>((resolve) => io.close(() => resolve()));
   await Promise.allSettled([prisma.$disconnect(), closeRedis()]);
   process.exit(0);

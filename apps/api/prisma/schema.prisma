@@ -164,6 +164,7 @@ model Workspace {
   surveys              Survey[]
   performanceReviews   PerformanceReview[]
   okrs                 Okr[]
+  weeklyReports        WeeklyReport[]
 
   @@map("workspaces")
 }
@@ -274,6 +275,8 @@ model User {
   okrsOwned            Okr[]                        @relation("OkrOwner")
   okrsCreated          Okr[]                        @relation("OkrCreator")
   okrCheckIns          OkrCheckIn[]
+  reportsGenerated     WeeklyReport[]               @relation("ReportGenerator")
+  reportsDeleted       WeeklyReport[]               @relation("ReportDeleter")
 
   @@unique([workspaceId, email])
   @@index([email])
@@ -646,6 +649,7 @@ model Week {
   functions    DepartmentFunction[]
   observations TaskObservation[]
   archive      WeeklyArchive?
+  reports      WeeklyReport[]
 
   @@unique([workspaceId, mondayDate])
   @@index([workspaceId, status])
@@ -1133,4 +1137,48 @@ model OkrCheckIn {
   @@index([okrId, createdAt])
   @@index([authorId])
   @@map("okr_check_ins")
+}
+
+// ─── Weekly Excel reports (MVP Fase 2) ──────────────────────────────────────
+// The week's workbook, generated automatically when an ADMIN closes the week
+// (or on demand), stored for 30 days and downloaded through the API (ADMIN
+// only). Deleting is soft (restorable until it expires); the cleanup job then
+// removes the file and stamps purgedAt, keeping the row for the audit trail.
+
+enum ReportSource {
+  WEEK_CLOSED
+  MANUAL
+}
+
+model WeeklyReport {
+  id            String       @id @default(uuid()) @db.Uuid
+  workspaceId   String       @db.Uuid
+  weekId        String       @db.Uuid
+  source        ReportSource
+  filename      String       @db.VarChar(255)
+  storageKey    String       @db.VarChar(512)
+  sizeBytes     Int
+  // Rows written and sheets, for the NOTAS sheet and support.
+  rowCount      Int
+  sheetCount    Int
+  // null = the system (automatic on close).
+  generatedById String?      @db.Uuid
+  createdAt     DateTime     @default(now())
+  expiresAt     DateTime
+  deletedAt     DateTime?
+  deletedById   String?      @db.Uuid
+  // File removed from storage (expired). The row stays for the audit trail.
+  purgedAt      DateTime?
+
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  week        Week      @relation(fields: [weekId], references: [id], onDelete: Cascade)
+  generatedBy User?     @relation("ReportGenerator", fields: [generatedById], references: [id], onDelete: SetNull)
+  deletedBy   User?     @relation("ReportDeleter", fields: [deletedById], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt])
+  @@index([weekId])
+  @@index([expiresAt, purgedAt])
+  @@index([generatedById])
+  @@index([deletedById])
+  @@map("weekly_reports")
 }

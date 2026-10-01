@@ -71,6 +71,9 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
             <NavLink to="/admin/weeks" className={navItem} onClick={onNavigate}>
               <CalendarDays className="size-4" aria-hidden /> Gestión de semanas
             </NavLink>
+            <NavLink to="/admin/reports" className={navItem} onClick={onNavigate}>
+              <FileSpreadsheet className="size-4" aria-hidden /> Reportes semanales
+            </NavLink>
             <NavLink to="/admin/surveys" className={navItem} onClick={onNavigate}>
               <ClipboardList className="size-4" aria-hidden /> Plantillas de encuesta
             </NavLink>

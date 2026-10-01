@@ -1,7 +1,7 @@
 import { CircleCheck, CircleX, Download, Eye, TriangleAlert } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { ApiError } from '../../lib/api';
-import { downloadWeek, useClosureCheck, useCloseWeek, type CloseResult, type WeekRow } from '../../lib/admin';
+import { type CloseResult, downloadReport, downloadWeek, useCloseWeek, useClosureCheck, type WeekRow } from '../../lib/admin';
 import { formatPercent, toPercent } from '../../lib/format';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
@@ -66,7 +66,9 @@ export function CloseWeekModal({ week, onClose, onViewHistory }: { week: WeekRow
               loading={downloading}
               onClick={async () => {
                 setDownloading(true);
-                await downloadWeek(result.week.id, result.week.weekNumber);
+                // The stored report generated on close; on-demand if that failed.
+                if (result.report) await downloadReport(result.report);
+                else await downloadWeek(result.week.id, result.week.weekNumber);
                 setDownloading(false);
               }}
             >
@@ -88,7 +90,11 @@ export function CloseWeekModal({ week, onClose, onViewHistory }: { week: WeekRow
       {result ? (
         <ul className="space-y-2 text-sm">
           <li>• Datos guardados en el histórico (índice final {formatPercent(toPercent(result.overall.index))}).</li>
-          <li>• Archivo: {`${result.week.year}-S${result.week.weekNumber}.xlsx`}, listo para descargar.</li>
+          <li>
+            {result.report
+              ? `• Reporte Excel generado (${result.report.sheetCount} hojas) y guardado 30 días en Reportes semanales.`
+              : '• El reporte Excel automático no se pudo generar; descárgalo aquí o genéralo desde Reportes semanales.'}
+          </li>
           <li>
             • Nueva semana {result.nextWeek.weekNumber} lista ({result.nextWeek.mondayDate} al {result.nextWeek.saturdayDate}), con los KPIs y funciones de esta.
           </li>

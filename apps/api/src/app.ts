@@ -21,6 +21,7 @@ import { performanceRoutes } from './modules/performance/performance.routes';
 import { reviewRoutes, surveyRoutes } from './modules/surveys/surveys.routes';
 import { okrRoutes } from './modules/okrs/okrs.routes';
 import { scorecardRoutes } from './modules/scorecard/scorecard.routes';
+import { reportRoutes } from './modules/reports/reports.routes';
 import { taskRoutes } from './modules/tasks/tasks.routes';
 import { publicUserRoutes, userRoutes } from './modules/users/users.routes';
 import type { AppEnv } from './types';
@@ -78,6 +79,7 @@ export function createApp() {
   api.route('/performance-reviews', reviewRoutes);
   api.route('/okrs', okrRoutes);
   api.route('/performance-dashboard', scorecardRoutes);
+  api.route('/export', reportRoutes);
   api.route('/public', publicBrandingRoutes);
   api.route('/storage', storageRoutes);
 

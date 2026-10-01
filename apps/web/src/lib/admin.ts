@@ -13,6 +13,7 @@ export const adminKeys = {
   workspace: ['workspace'] as const,
   weeks: ['admin', 'weeks'] as const,
   audit: ['admin', 'audit'] as const,
+  reports: ['admin', 'reports'] as const,
 };
 
 const failed = (fallback: string) => (e: unknown) => toast.error(e instanceof ApiError ? e.message : fallback);
@@ -274,6 +275,8 @@ export interface CloseResult {
   carriedTasks: number;
   overall: { index: number | null };
   incompleteAreas: number;
+  // The weekly Excel generated on close; null if it failed (the week still closed).
+  report: WeeklyReport | null;
 }
 
 export function useWeeksOverview() {
@@ -367,5 +370,55 @@ export async function downloadAudit(format: 'csv' | 'xlsx', f: Omit<AuditFilters
     saveBlob(blob, filename);
   } catch (e) {
     failed('No se pudo exportar la auditoría')(e);
+  }
+}
+
+// ─── Weekly Excel reports ───────────────────────────────────────────────────
+
+export interface WeeklyReport {
+  id: string;
+  week: { id: string; weekNumber: number; year: number; mondayDate: string };
+  source: 'WEEK_CLOSED' | 'MANUAL';
+  filename: string;
+  sizeBytes: number;
+  rowCount: number;
+  sheetCount: number;
+  generatedBy: { id: string; displayName: string } | null;
+  createdAt: string;
+  expiresAt: string;
+  deletedAt: string | null;
+  status: 'AVAILABLE' | 'DELETED' | 'EXPIRED';
+  downloadUrl: string;
+}
+
+export function useReports(includeDeleted: boolean) {
+  return useQuery({
+    queryKey: [...adminKeys.reports, includeDeleted],
+    queryFn: ({ signal }) => api<{ data: WeeklyReport[] }>('/export', { signal, query: { includeDeleted } }).then((r) => r.data),
+  });
+}
+
+export function useGenerateReport() {
+  return useAdminMutation(
+    (weekId: string) => api<{ report: WeeklyReport }>('/export/generate-weekly', { method: 'POST', body: { weekId, format: 'xlsx' } }),
+    [adminKeys.reports],
+    'No se pudo generar el reporte',
+  );
+}
+
+export function useDeleteReport() {
+  return useAdminMutation((id: string) => api(`/export/${id}`, { method: 'DELETE' }), [adminKeys.reports], 'No se pudo eliminar el reporte');
+}
+
+export function useRestoreReport() {
+  return useAdminMutation((id: string) => api(`/export/${id}/restore`, { method: 'POST' }), [adminKeys.reports], 'No se pudo restaurar el reporte');
+}
+
+export async function downloadReport(r: Pick<WeeklyReport, 'id' | 'filename'>) {
+  try {
+    const { blob, filename } = await download(`/export/${r.id}/download`, { fallbackName: r.filename });
+    saveBlob(blob, filename);
+  } catch (e) {
+    toast.error(e instanceof ApiError ? e.message : 'No se pudo descargar el reporte');
   }
 }

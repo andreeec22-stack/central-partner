@@ -31,6 +31,9 @@ const ACTION_GROUPS: { label: string; actions: [string, string][] }[] = [
     actions: [
       ['WEEK_CREATED', 'Abrió semana'],
       ['WEEK_CLOSED', 'Cerró semana'],
+      ['REPORT_GENERATED', 'Generó reporte semanal'],
+      ['REPORT_DOWNLOADED', 'Descargó reporte semanal'],
+      ['REPORT_GENERATION_FAILED', 'Falló el reporte semanal'],
       ['KPI_CREATED', 'Creó KPI'],
       ['KPI_RECORDED', 'Registró resultado de KPI'],
       ['FUNCTION_MARKED', 'Marcó función'],

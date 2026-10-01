@@ -68,6 +68,13 @@ export const ActivityAction = {
   OKR_UPDATED: 'OKR_UPDATED',
   OKR_DELETED: 'OKR_DELETED',
   OKR_CHECKED_IN: 'OKR_CHECKED_IN',
+  REPORT_GENERATED: 'REPORT_GENERATED',
+  // The automatic report on week close failed (the week still closed).
+  REPORT_GENERATION_FAILED: 'REPORT_GENERATION_FAILED',
+  REPORT_DOWNLOADED: 'REPORT_DOWNLOADED',
+  REPORT_DELETED: 'REPORT_DELETED',
+  REPORT_RESTORED: 'REPORT_RESTORED',
+  REPORTS_PURGED: 'REPORTS_PURGED',
 } as const;
 export type ActivityAction = (typeof ActivityAction)[keyof typeof ActivityAction];
 

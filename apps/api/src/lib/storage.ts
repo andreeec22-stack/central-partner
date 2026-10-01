@@ -1,15 +1,15 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { env } from '../config/env';
 
 // Object storage for task files, Excel imports and logos.
 //   AWS_S3_BUCKET set → S3 (presigned GET URLs straight to the bucket)
 //   otherwise         → local disk + HMAC-signed, expiring API URLs (dev)
-// Objects are never deleted here: soft-deleted files stay for the audit trail
-// and the weekly cleanup job hard-deletes them later (Gap 9).
+// Soft-deleted task files stay for the audit trail and the weekly cleanup job
+// hard-deletes them later (Gap 9); expired weekly reports are removed by theirs.
 
 export interface UrlOptions {
   filename: string;
@@ -23,6 +23,8 @@ export interface StorageDriver {
   readonly kind: 's3' | 'local';
   put(key: string, body: Uint8Array, contentType: string): Promise<void>;
   get(key: string): Promise<Uint8Array<ArrayBuffer> | null>;
+  // Idempotent: a missing object is not an error.
+  delete(key: string): Promise<void>;
   signedUrl(key: string, opts: UrlOptions): Promise<string>;
 }
 
@@ -56,6 +58,10 @@ class S3Storage implements StorageDriver {
       if ((error as { name?: string }).name === 'NoSuchKey') return null;
       throw error;
     }
+  }
+
+  async delete(key: string) {
+    await this.client.send(new DeleteObjectCommand({ Bucket: env.AWS_S3_BUCKET, Key: key }));
   }
 
   signedUrl(key: string, opts: UrlOptions) {
@@ -123,6 +129,10 @@ class LocalStorage implements StorageDriver {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw error;
     }
+  }
+
+  async delete(key: string) {
+    await rm(this.pathFor(key), { force: true });
   }
 
   async signedUrl(key: string, opts: UrlOptions) {

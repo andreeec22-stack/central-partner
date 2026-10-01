@@ -7,6 +7,7 @@ import { prisma, type Tx } from '../../lib/prisma';
 import { emitTo, rooms } from '../../lib/realtime';
 import { addDays, dateToDay, dayToDate, isLastSaturdayOfMonth, isoWeek, localDay, mondayOf, mondayOfDay, saturdayOf } from '../../lib/week';
 import type { AuthUser } from '../../types';
+import { generateOnClose } from '../reports/reports.service';
 import { ActivityAction, logActivity } from '../audit/activity-log';
 import type { ClientContext } from '../auth/auth.service';
 import { notifySafely } from '../notifications/notify.service';
@@ -384,7 +385,11 @@ export async function closeWeek(user: AuthUser, weekId: string, force: boolean, 
     nextWeekId: next.id,
     carriedTasks: outcome.carried,
   });
+  // The week's Excel report, from the snapshot just frozen. A failure is
+  // logged and audited but never undoes the closing (report: null).
+  const weeklyReport = await generateOnClose(user, week.id, ctx.ipAddress);
   return {
+    report: weeklyReport,
     week: presentWeek(outcome.archived),
     nextWeek: presentWeek(next),
     carriedTasks: outcome.carried,

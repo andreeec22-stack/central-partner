@@ -18,6 +18,7 @@ const WeekManagementPage = lazy(() => import('./pages/admin/WeekManagementPage')
 const AuditLogsPage = lazy(() => import('./pages/admin/AuditLogsPage'));
 const DocsPage = lazy(() => import('./pages/admin/DocsPage'));
 const SurveyTemplatesPage = lazy(() => import('./pages/admin/SurveyTemplatesPage'));
+const ReportsPage = lazy(() => import('./pages/admin/ReportsPage'));
 const PerformancePage = lazy(() => import('./pages/performance/PerformancePage'));
 const SurveyResponsePage = lazy(() => import('./pages/performance/surveys/SurveyResponsePage'));
 const ReviewsPage = lazy(() => import('./pages/performance/ReviewsPage'));
@@ -120,6 +121,7 @@ export const router = createBrowserRouter([
               { path: '/admin/audit', element: page(<AuditLogsPage />) },
               { path: '/admin/docs', element: page(<DocsPage />) },
               { path: '/admin/surveys', element: page(<SurveyTemplatesPage />) },
+              { path: '/admin/reports', element: page(<ReportsPage />) },
               // Old links.
               { path: '/admin/branding', element: <Navigate to="/admin/settings/workspace" replace /> },
               { path: '/admin', element: <Navigate to="/admin/settings/users" replace /> },
