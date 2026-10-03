@@ -14,7 +14,7 @@ export interface Counter {
 export class MemoryCounter implements Counter {
   private readonly windows = new Map<string, { count: number; resetAt: number }>();
 
-  constructor(private readonly now: () => number = Date.now) {}
+  constructor(private readonly now: () => number = () => Date.now()) {}
 
   async hit(key: string, windowSeconds: number) {
     const now = this.now();
@@ -48,6 +48,14 @@ async function hit(key: string, windowSeconds: number) {
     }
   }
   return memory.hit(key, windowSeconds);
+}
+
+// A quota counted outside the request pipeline (e.g. per workspace, only when
+// the costly path actually runs). Same store as the HTTP limiter: Redis when
+// available, so replicas share it; memory otherwise.
+export async function consumeQuota(key: string, max: number, windowSeconds: number) {
+  const { count, resetInSeconds } = await hit(`quota:${key}`, windowSeconds);
+  return { allowed: count <= max, count, resetInSeconds };
 }
 
 // S6: the global /api limiter runs before requireAuth, so c.get('user') is still

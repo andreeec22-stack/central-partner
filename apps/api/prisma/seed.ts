@@ -8,6 +8,7 @@ import { Prisma, PrismaClient, type FunctionFrequency, type FunctionFulfillment,
 import bcrypt from 'bcryptjs';
 import { addDays, dayToDate, isoWeek, localDay, mondayOf, saturdayOf } from '../src/lib/week';
 import { buildWeekData } from '../src/modules/weeks/week-data';
+import { takeKpiSnapshot } from '../src/modules/weeks/kpi-snapshot';
 import { prisma as appPrisma } from '../src/lib/prisma';
 import { getPerformanceMetrics } from '../src/modules/performance/performance.service';
 import { upsertPerformanceReview } from '../src/modules/surveys/reviews.service';
@@ -276,6 +277,7 @@ async function main() {
         data: snapshot as unknown as Prisma.InputJsonValue,
       },
     });
+    await takeKpiSnapshot(prisma, ws.id, week.id, snapshot);
     await prisma.week.update({ where: { id: week.id }, data: { status: 'ARCHIVED', archivedAt: now, archivedById: director.id } });
     lastClosed = { id: week.id, monday };
   }

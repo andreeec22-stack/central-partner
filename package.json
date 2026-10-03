@@ -10,7 +10,17 @@
     "dev:api": "npm run dev -w @central-partner/api",
     "test:api": "npm run test -w @central-partner/api",
     "test:e2e": "npm run test -w @central-partner/e2e",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "build": "npm run build -w @central-partner/api && npm run build -w @central-partner/web",
+    "test": "npm run test:unit -w @central-partner/api && npm run test -w @central-partner/web",
+    "test:integration": "npm run test:integration -w @central-partner/api",
+    "prod:up": "docker compose -f docker-compose.prod.yml up -d --build",
+    "prod:down": "docker compose -f docker-compose.prod.yml down",
+    "prod:logs": "docker compose -f docker-compose.prod.yml logs -f --tail 100"
+  },
+  "overrides": {
+    "deepmerge-ts": "^8.0.2",
+    "uuid": "^11.1.1"
   },
   "engines": {
     "node": ">=20"

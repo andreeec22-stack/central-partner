@@ -1,0 +1,113 @@
+# Production stack: PostgreSQL + Redis + API + web (nginx). Settings come from
+# the root .env (copy .env.example). See DEPLOYMENT_GUIDE.md.
+#
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# The dev infrastructure (docker-compose.yml: Postgres/Redis/Meilisearch on the
+# host ports) is separate and untouched; this project has its own volumes and
+# publishes only the web port. Postgres, Redis and the API stay inside the
+# Docker network, reached through nginx (/api, /socket.io, /api/health).
+name: central-partner-prod
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-central_partner}
+      POSTGRES_USER: ${POSTGRES_USER:-central}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging: *logging
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # Cache, rate limits and socket fan-out only: losing it loses nothing durable.
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging: *logging
+
+  api:
+    image: ${API_IMAGE:-central-partner-api}:${IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: "3001"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      APP_VERSION: ${IMAGE_TAG:-local}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-central}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-central_partner}
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env (48+ random chars)}
+      APP_URL: ${APP_URL:-http://localhost}
+      CORS_ORIGIN: ${APP_URL:-http://localhost}
+      # Behind nginx: the client address is the right-most X-Forwarded-For entry.
+      TRUST_PROXY: "true"
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      COOKIE_SAMESITE: Lax
+      # One replica runs the weekly cycle, survey opening and report purge.
+      SCHEDULERS_ENABLED: ${SCHEDULERS_ENABLED:-true}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-300}
+      AUTH_RATE_LIMIT_MAX: ${AUTH_RATE_LIMIT_MAX:-10}
+      REPORT_GENERATIONS_PER_HOUR: ${REPORT_GENERATIONS_PER_HOUR:-3}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-Central Partner <noreply@centralpartner.com>}
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET:-}
+      AWS_S3_REGION: ${AWS_S3_REGION:-us-east-1}
+      AWS_S3_ENDPOINT: ${AWS_S3_ENDPOINT:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
+    volumes:
+      # Local file storage (used when AWS_S3_BUCKET is empty).
+      - api-uploads:/app/apps/api/uploads
+    stop_grace_period: 20s
+    logging: *logging
+
+  web:
+    image: ${WEB_IMAGE:-central-partner-web}:${IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-80}:80"
+    logging: *logging
+
+volumes:
+  postgres-data:
+  redis-data:
+  api-uploads:

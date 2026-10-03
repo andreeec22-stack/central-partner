@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import type { Prisma, ReportSource, Week, WeeklyReport } from '@prisma/client';
 import { AppError, notFound } from '../../lib/errors';
+import { env } from '../../config/env';
 import { logger } from '../../lib/logger';
+import { recordMetric, timed } from '../../lib/metrics';
+import { consumeQuota } from '../../middleware/rate-limit';
+import { reportCache, reportCacheKey } from './report-cache';
 import { prisma, type Tx } from '../../lib/prisma';
 import { getStorage } from '../../lib/storage';
 import { dateToDay } from '../../lib/week';
@@ -20,8 +24,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export const XLSX_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 const HISTORY_WEEKS = 12;
 
-// Mutable for tests (E2.1 limits).
-export const reportLimits = { maxRows: MAX_REPORT_ROWS, maxBytes: MAX_REPORT_BYTES };
+// Mutable for tests. E2.1 size limits; Fase 4: manual generations per
+// workspace per hour (the automatic one on week close never counts).
+export const reportLimits = { maxRows: MAX_REPORT_ROWS, maxBytes: MAX_REPORT_BYTES, perHour: env.REPORT_GENERATIONS_PER_HOUR };
 
 type ReportRow = WeeklyReport & { week: Pick<Week, 'id' | 'weekNumber' | 'year' | 'mondayDate'>; generatedBy: { id: string; displayName: string } | null };
 const include = {
@@ -94,7 +99,7 @@ export async function generateWeeklyReport(p: GenerateParams): Promise<ReportRow
   const week = await prisma.week.findFirst({ where: { id: p.weekId, workspaceId: p.workspaceId } });
   if (!week) throw new AppError(404, 'WEEK_NOT_FOUND', 'Semana no encontrada');
 
-  const created = await prisma.$transaction(
+  const created = await timed('report_generation', () => prisma.$transaction(
     async (tx) => {
       // E2.5: one generation per week at a time. The lock lives as long as this
       // transaction, so it is released even if generation fails (no Redis needed).
@@ -163,8 +168,87 @@ export async function generateWeeklyReport(p: GenerateParams): Promise<ReportRow
       return report;
     },
     { timeout: 120_000 },
-  );
+  ));
+  recordMetric('report_generated');
+  recordMetric('report_size_bytes', created.sizeBytes);
+  // The week has a new latest report: drop the cached one.
+  await reportCache.invalidate(reportCacheKey(p.workspaceId, week.id));
   return created;
+}
+
+// Fase 4: at most `reportLimits.perHour` manual generations per workspace per
+// hour (Redis-shared across replicas when available). 429 EXPORT_RATE_LIMITED.
+export async function assertGenerationQuota(workspaceId: string) {
+  const quota = await consumeQuota(`report-generation:${workspaceId}`, reportLimits.perHour, 60 * 60);
+  if (quota.allowed) return;
+  recordMetric('report_rate_limited');
+  throw new AppError(
+    429,
+    'EXPORT_RATE_LIMITED',
+    `Demasiadas generaciones de reportes: máximo ${reportLimits.perHour} por hora. Intenta en ${Math.ceil(quota.resetInSeconds / 60)} min`,
+    { retryAfterSeconds: quota.resetInSeconds, maxPerHour: reportLimits.perHour },
+  );
+}
+
+export async function generateManualReport(user: AuthUser, weekId: string, ipAddress?: string) {
+  const week = await prisma.week.findFirst({ where: { id: weekId, workspaceId: user.workspaceId }, select: { id: true } });
+  if (!week) throw new AppError(404, 'WEEK_NOT_FOUND', 'Semana no encontrada');
+  await assertGenerationQuota(user.workspaceId);
+  return generateWeeklyReport({
+    workspaceId: user.workspaceId,
+    timeZone: user.workspaceTimezone,
+    weekId,
+    source: 'MANUAL',
+    actor: { id: user.id, displayName: user.displayName },
+    ipAddress,
+  });
+}
+
+// POST /export/week-report — the week's report, fastest source first:
+//   1. cache (report:{workspaceId}:{weekId})
+//   2. its latest stored report (then cached)
+//   3. a new manual generation (counts against the hourly quota), then cached
+// Every serve is audited (REPORT_DOWNLOADED): it is a confidential document.
+export async function weekReport(user: AuthUser, weekId: string, ipAddress?: string) {
+  const key = reportCacheKey(user.workspaceId, weekId);
+  const start = performance.now();
+  let served = await reportCache.get(key);
+  let reportId: string | null = null;
+  let source: 'cache' | 'storage' | 'generated' = 'cache';
+
+  if (!served) {
+    const latest = await prisma.weeklyReport.findFirst({
+      where: { workspaceId: user.workspaceId, weekId, deletedAt: null, purgedAt: null, expiresAt: { gt: new Date() } },
+      orderBy: { createdAt: 'desc' },
+    });
+    let stored = latest ? await getStorage().get(latest.storageKey) : null;
+    let filename = latest?.filename ?? '';
+    reportId = latest?.id ?? null;
+    source = 'storage';
+    if (!stored) {
+      const created = await generateManualReport(user, weekId, ipAddress);
+      stored = await getStorage().get(created.storageKey);
+      if (!stored) throw new AppError(500, 'INTERNAL_ERROR', 'El reporte se generó pero no se pudo leer');
+      filename = created.filename;
+      reportId = created.id;
+      source = 'generated';
+    }
+    served = { data: stored, filename };
+    await reportCache.set(key, served);
+  }
+  recordMetric(`week_report_from_${source}`);
+  recordMetric('week_report_ms', Math.round(performance.now() - start));
+
+  await logActivity({
+    workspaceId: user.workspaceId,
+    userId: user.id,
+    action: ActivityAction.REPORT_DOWNLOADED,
+    entityType: 'WeeklyReport',
+    entityId: reportId,
+    metadata: { weekId, filename: served.filename, source },
+    ipAddress,
+  });
+  return { ...served, source };
 }
 
 // Never lets a report failure undo the week closing: logged and audited instead.
@@ -237,6 +321,7 @@ export async function deleteReport(user: AuthUser, id: string, ipAddress?: strin
   if (!r.deletedAt) {
     await prisma.weeklyReport.update({ where: { id }, data: { deletedAt: new Date(), deletedById: user.id } });
     await logActivity({ workspaceId: user.workspaceId, userId: user.id, action: ActivityAction.REPORT_DELETED, entityType: 'WeeklyReport', entityId: id, metadata: { weekNumber: r.week.weekNumber }, ipAddress });
+    await reportCache.invalidate(reportCacheKey(user.workspaceId, r.week.id));
   }
   return { report: presentReport(await findReport(user, id)) };
 }
@@ -247,6 +332,7 @@ export async function restoreReport(user: AuthUser, id: string, ipAddress?: stri
   if (r.deletedAt) {
     await prisma.weeklyReport.update({ where: { id }, data: { deletedAt: null, deletedById: null } });
     await logActivity({ workspaceId: user.workspaceId, userId: user.id, action: ActivityAction.REPORT_RESTORED, entityType: 'WeeklyReport', entityId: id, metadata: { weekNumber: r.week.weekNumber }, ipAddress });
+    await reportCache.invalidate(reportCacheKey(user.workspaceId, r.week.id));
   }
   return { report: presentReport(await findReport(user, id)) };
 }
@@ -258,13 +344,14 @@ export async function restoreReport(user: AuthUser, id: string, ipAddress?: stri
 export async function purgeExpiredReports(now = new Date(), batch = 500) {
   const expired = await prisma.weeklyReport.findMany({
     where: { expiresAt: { lte: now }, purgedAt: null },
-    select: { id: true, workspaceId: true, storageKey: true },
+    select: { id: true, workspaceId: true, weekId: true, storageKey: true },
     take: batch,
   });
   const purged: string[] = [];
   for (const r of expired) {
     try {
       await getStorage().delete(r.storageKey);
+      await reportCache.invalidate(reportCacheKey(r.workspaceId, r.weekId));
       purged.push(r.id);
     } catch (error) {
       logger.error('report purge failed', { error, reportId: r.id });

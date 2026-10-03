@@ -1,0 +1,124 @@
+user nginx;
+worker_processes auto;
+error_log /dev/stderr warn;
+pid /var/run/nginx.pid;
+
+events {
+  worker_connections 1024;
+}
+
+http {
+  include /etc/nginx/mime.types;
+  default_type application/octet-stream;
+
+  log_format main '$remote_addr - [$time_local] "$request" $status $body_bytes_sent '
+                  '"$http_referer" "$http_user_agent" rt=$request_time';
+  # stdout/stderr → `docker logs` (rotated by the json-file driver).
+  access_log /dev/stdout main;
+
+  sendfile on;
+  tcp_nopush on;
+  tcp_nodelay on;
+  keepalive_timeout 65;
+  server_tokens off;
+
+  # Task attachments go up to 50 MB (plus the multipart envelope).
+  client_max_body_size 60m;
+
+  # The SPA's own files. API responses arrive already gzipped by the API
+  # (gzip_proxied is off by default, so nginx never compresses them twice).
+  gzip on;
+  gzip_vary on;
+  gzip_min_length 1024;
+  gzip_types text/plain text/css text/xml text/javascript application/javascript
+             application/json application/xml image/svg+xml;
+
+  map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+  }
+
+  # Rendered at container start by the nginx image's envsubst step (only PORT
+  # and API_UPSTREAM are substituted) and by 15-runtime-conf.sh:
+  #   resolver.conf  the container's own DNS (Docker: 127.0.0.11, Railway: its
+  #                  internal resolver). The API is looked up per request, so a
+  #                  redeployed API with a new private IP is found without
+  #                  restarting nginx.
+  #   real-ip.conf   empty, or (TRUST_EDGE_PROXY=true, Railway) the client
+  #                  address taken from the edge's X-Forwarded-For.
+  include /etc/nginx/runtime/resolver.conf;
+  include /etc/nginx/runtime/real-ip.conf;
+
+  server {
+    listen ${PORT};
+    listen [::]:${PORT};
+    server_name _;
+    root /usr/share/nginx/html;
+
+    # docker-compose: api:3001 · Railway: api.railway.internal:<api PORT>
+    set $api_upstream http://${API_UPSTREAM};
+
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    location ~ /\. {
+      deny all;
+    }
+
+    # nginx itself (container health check).
+    location = /health {
+      access_log off;
+      default_type text/plain;
+      return 200 "healthy\n";
+    }
+
+    # The API's health (database + Redis), from outside the Docker network.
+    location = /api/health {
+      access_log off;
+      rewrite ^ /health break;
+      proxy_pass $api_upstream;
+    }
+
+    location /api/ {
+      proxy_pass $api_upstream;
+      proxy_http_version 1.1;
+      proxy_set_header Connection "";
+      proxy_set_header Host $host;
+      # The API (TRUST_PROXY=true) takes the right-most entry: the client address
+      # ($remote_addr, already the real client when real-ip.conf is active).
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+      # Uploads stream straight to the API; report generation can take a while.
+      proxy_request_buffering off;
+      proxy_read_timeout 120s;
+    }
+
+    location /socket.io/ {
+      proxy_pass $api_upstream;
+      proxy_http_version 1.1;
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection $connection_upgrade;
+      proxy_set_header Host $host;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+      proxy_read_timeout 1h;
+    }
+
+    # Vite's hashed bundles never change under the same name.
+    location /assets/ {
+      add_header Cache-Control "public, max-age=31536000, immutable" always;
+      add_header X-Content-Type-Options "nosniff" always;
+      try_files $uri =404;
+    }
+
+    # Everything else is the SPA; index.html is always revalidated so a deploy shows up at once.
+    location / {
+      try_files $uri $uri/ /index.html;
+      add_header Cache-Control "no-cache" always;
+      add_header X-Content-Type-Options "nosniff" always;
+      add_header X-Frame-Options "DENY" always;
+      add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    }
+  }
+}

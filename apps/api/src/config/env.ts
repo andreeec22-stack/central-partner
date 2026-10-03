@@ -74,6 +74,14 @@ const schema = z.object({
   TWILIO_ACCOUNT_SID: z.string().default(''),
   TWILIO_AUTH_TOKEN: z.string().default(''),
   TWILIO_WHATSAPP_NUMBER: z.string().default(''),
+
+  // Fase 4: manual weekly-report generations per workspace per hour.
+  REPORT_GENERATIONS_PER_HOUR: z.coerce.number().int().positive().default(3),
+
+  // Fase 5: error reporting (empty = logs only) and the deployed version.
+  SENTRY_DSN: z.string().default(''),
+  SENTRY_ENVIRONMENT: z.string().default(''),
+  APP_VERSION: z.string().default(''),
 });
 
 export type Env = z.infer<typeof schema>;
@@ -83,6 +91,10 @@ function load(): Env {
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => `  - ${i.path.join('.')}: ${i.message}`).join('\n');
     throw new Error(`Invalid environment configuration:\n${issues}`);
+  }
+  // The localhost default would put dev links in production invite/reset emails.
+  if (parsed.data.NODE_ENV === 'production' && !process.env.APP_URL) {
+    throw new Error('Invalid environment configuration:\n  - APP_URL: required in production (public URL of the web app)');
   }
   return parsed.data;
 }

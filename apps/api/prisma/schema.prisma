@@ -165,6 +165,7 @@ model Workspace {
   performanceReviews   PerformanceReview[]
   okrs                 Okr[]
   weeklyReports        WeeklyReport[]
+  kpiSnapshots         WeekKpiSnapshot[]
 
   @@map("workspaces")
 }
@@ -650,6 +651,7 @@ model Week {
   observations TaskObservation[]
   archive      WeeklyArchive?
   reports      WeeklyReport[]
+  kpiSnapshots WeekKpiSnapshot[]
 
   @@unique([workspaceId, mondayDate])
   @@index([workspaceId, status])
@@ -1181,4 +1183,37 @@ model WeeklyReport {
   @@index([generatedById])
   @@index([deletedById])
   @@map("weekly_reports")
+}
+
+// ─── Week KPI snapshots (MVP Fase 4) ────────────────────────────────────────
+// The headline numbers of a closed week, one row per area plus one for the
+// whole company (departmentKey "ALL"), written when the week is closed. The
+// history charts and trends read these few columns instead of loading and
+// parsing every week's full WeeklyArchive JSON. Immutable, like the archive.
+
+model WeekKpiSnapshot {
+  id                 String     @id @default(uuid()) @db.Uuid
+  workspaceId        String     @db.Uuid
+  weekId             String     @db.Uuid
+  // A department id, or "ALL" for the company (NULLs aren't unique in Postgres).
+  departmentKey      String     @db.VarChar(36)
+  departmentName     String?    @db.VarChar(80)
+  // Fractions 0–1, as in the weekly index (null = nothing to measure).
+  indexValue         Float?
+  taskProgress       Float?
+  kpiCompliance      Float?
+  functionCompliance Float?
+  semaphore          Semaphore?
+  tasksTotal         Int
+  tasksDue           Int
+  tasksDone          Int
+  tasksOverdue       Int
+  createdAt          DateTime   @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  week      Week      @relation(fields: [weekId], references: [id], onDelete: Cascade)
+
+  @@unique([weekId, departmentKey])
+  @@index([workspaceId, weekId])
+  @@map("week_kpi_snapshots")
 }

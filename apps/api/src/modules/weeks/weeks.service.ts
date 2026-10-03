@@ -8,6 +8,7 @@ import { emitTo, rooms } from '../../lib/realtime';
 import { addDays, dateToDay, dayToDate, isLastSaturdayOfMonth, isoWeek, localDay, mondayOf, mondayOfDay, saturdayOf } from '../../lib/week';
 import type { AuthUser } from '../../types';
 import { generateOnClose } from '../reports/reports.service';
+import { takeKpiSnapshot } from './kpi-snapshot';
 import { ActivityAction, logActivity } from '../audit/activity-log';
 import type { ClientContext } from '../auth/auth.service';
 import { notifySafely } from '../notifications/notify.service';
@@ -352,6 +353,7 @@ export async function closeWeek(user: AuthUser, weekId: string, force: boolean, 
           data: snapshot as unknown as Prisma.InputJsonValue,
         },
       });
+      await takeKpiSnapshot(tx, user.workspaceId, week.id, snapshot);
       const archived = await tx.week.update({
         where: { id: week.id },
         data: { status: 'ARCHIVED', archivedAt: new Date(), archivedById: user.id },

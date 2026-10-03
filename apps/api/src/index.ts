@@ -5,11 +5,13 @@ import { env } from './config/env';
 import { logger } from './lib/logger';
 import { prisma } from './lib/prisma';
 import { closeRedis, getRedis } from './lib/redis';
+import { captureError, flushSentry, initSentry } from './lib/sentry';
 import { attachSocketServer } from './realtime/socket-server';
 import { startWeekScheduler } from './modules/weeks/weeks.service';
 import { startSurveyScheduler } from './modules/surveys/surveys.service';
 import { startReportCleanup } from './modules/reports/reports.service';
 
+initSentry();
 const app = createApp();
 getRedis(); // start connecting early; the API works without it
 
@@ -34,10 +36,13 @@ async function shutdown(signal: string) {
   logger.info('shutting down', { signal });
   for (const stop of stopJobs) stop();
   await new Promise<void>((resolve) => io.close(() => resolve()));
-  await Promise.allSettled([prisma.$disconnect(), closeRedis()]);
+  await Promise.allSettled([prisma.$disconnect(), closeRedis(), flushSentry()]);
   process.exit(0);
 }
 
 process.on('SIGINT', () => void shutdown('SIGINT'));
 process.on('SIGTERM', () => void shutdown('SIGTERM'));
-process.on('unhandledRejection', (error) => logger.error('unhandled rejection', { error }));
+process.on('unhandledRejection', (error) => {
+  logger.error('unhandled rejection', { error });
+  captureError(error);
+});

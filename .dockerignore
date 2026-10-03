@@ -1,0 +1,16 @@
+# Build context for apps/api/Dockerfile and apps/web/Dockerfile (repo root).
+**/node_modules
+**/dist
+**/.env
+**/.env.*
+!**/.env.example
+.git
+.claude
+backups
+docs
+apps/api/uploads
+apps/api/uploads-e2e
+apps/api/logs
+apps/e2e/playwright-report
+apps/e2e/test-results
+**/*.log

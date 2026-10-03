@@ -1,0 +1,208 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  REGISTRY: ghcr.io
+  # Same credentials as docker-compose.yml / apps/api/.env.example, so every
+  # default URL (dev, test, e2e databases) works unchanged.
+  PG_URL: postgresql://central:central@localhost:5432
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: central
+          POSTGRES_PASSWORD: central
+          POSTGRES_DB: central_partner
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U central"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Prisma client
+        run: npm run db:generate -w @central-partner/api
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: API unit tests
+        run: npm run test:unit -w @central-partner/api
+
+      - name: Web tests
+        run: npm run test -w @central-partner/web
+
+      - name: Migrate test database
+        working-directory: apps/api
+        env:
+          DATABASE_URL: ${{ env.PG_URL }}/central_partner_test
+        run: |
+          psql "$PG_URL/central_partner" -c "CREATE DATABASE central_partner_test"
+          npx prisma migrate deploy
+
+      - name: API integration tests
+        run: npm run test:integration -w @central-partner/api
+
+      - name: Install Playwright browser
+        working-directory: apps/e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: E2E tests
+        run: |
+          # The E2E API starts with --env-file=.env; real values come from the job.
+          cp apps/api/.env.example apps/api/.env
+          npm run test:e2e
+
+      - name: Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: apps/e2e/playwright-report
+          retention-days: 7
+
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      # Critical findings fail here; HIGH ones are checked by Trivy below, which
+      # honours the reviewed exceptions in .trivyignore.
+      - name: npm audit (production dependencies)
+        run: npm audit --omit=dev --audit-level=critical
+
+      - name: Trivy (dependencies, Dockerfiles, secrets)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+          trivyignores: .trivyignore
+
+  images:
+    needs: [test, security]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        app: [api, web]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ghcr.io/<owner>/<repo>-api|web (lower-cased), tagged sha-<commit> and latest on main.
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}-${{ matrix.app }}
+          tags: |
+            type=sha,format=short
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/${{ matrix.app }}/Dockerfile
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.app }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.app }}
+
+  # Runs only when the repository variable DEPLOY_ENABLED is "true" (Settings →
+  # Variables) and the production environment's secrets exist. See DEPLOYMENT_GUIDE.md.
+  deploy:
+    needs: images
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - name: Deploy over SSH
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          # Pinned host key (ssh-keyscan <host>), not trusted on first use.
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/central-partner' }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy_key && chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          TAG="sha-${GITHUB_SHA::7}"
+          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" \
+            "DEPLOY_PATH='$DEPLOY_PATH' IMAGE_TAG='$TAG' bash -s" <<'EOF'
+          set -euo pipefail
+          cd "$DEPLOY_PATH"
+          git pull --ff-only origin main
+          export IMAGE_TAG
+          docker compose -f docker-compose.prod.yml pull api web
+          # The API applies pending migrations before it starts serving.
+          docker compose -f docker-compose.prod.yml up -d --no-build --remove-orphans
+          for i in $(seq 1 30); do
+            docker compose -f docker-compose.prod.yml exec -T web wget -qO- http://127.0.0.1/api/health && exit 0
+            sleep 5
+          done
+          echo "API did not become healthy" >&2
+          docker compose -f docker-compose.prod.yml logs --tail 100 api
+          exit 1
+          EOF

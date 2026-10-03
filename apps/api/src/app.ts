@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { compress } from 'hono/compress';
 import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
 import { env } from './config/env';
@@ -22,6 +23,7 @@ import { reviewRoutes, surveyRoutes } from './modules/surveys/surveys.routes';
 import { okrRoutes } from './modules/okrs/okrs.routes';
 import { scorecardRoutes } from './modules/scorecard/scorecard.routes';
 import { reportRoutes } from './modules/reports/reports.routes';
+import { metricsRoutes } from './modules/metrics/metrics.routes';
 import { taskRoutes } from './modules/tasks/tasks.routes';
 import { publicUserRoutes, userRoutes } from './modules/users/users.routes';
 import type { AppEnv } from './types';
@@ -30,6 +32,9 @@ export function createApp() {
   const app = new Hono<AppEnv>();
 
   app.use('*', requestContext);
+  // gzip/deflate for text and JSON over 1 KB, when the client accepts it.
+  // Files that are already compressed (xlsx, png, pdf…) are left as they are.
+  app.use('*', compress());
   // Logos and signed file links are loaded cross-origin (<img>, downloads from
   // the SPA's domain); everything else keeps the strict same-origin policy.
   const strictHeaders = secureHeaders();
@@ -54,7 +59,18 @@ export function createApp() {
       () => 'down' as const,
     );
     const redis = env.REDIS_URL ? (getRedis() ? 'ok' : 'down') : 'disabled';
-    return c.json({ status: database === 'ok' ? 'ok' : 'degraded', database, redis }, database === 'ok' ? 200 : 503);
+    // 503 only when the database is down: Redis is optional (memory fallbacks).
+    return c.json(
+      {
+        status: database === 'ok' ? 'ok' : 'degraded',
+        database,
+        redis,
+        version: env.APP_VERSION || undefined,
+        uptimeSeconds: Math.round(process.uptime()),
+        timestamp: new Date().toISOString(),
+      },
+      database === 'ok' ? 200 : 503,
+    );
   });
 
   const api = new Hono<AppEnv>();
@@ -80,6 +96,7 @@ export function createApp() {
   api.route('/okrs', okrRoutes);
   api.route('/performance-dashboard', scorecardRoutes);
   api.route('/export', reportRoutes);
+  api.route('/admin/metrics', metricsRoutes);
   api.route('/public', publicBrandingRoutes);
   api.route('/storage', storageRoutes);
 

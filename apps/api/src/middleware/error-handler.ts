@@ -3,6 +3,7 @@ import type { Context } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { AppError } from '../lib/errors';
 import { logger } from '../lib/logger';
+import { captureError } from '../lib/sentry';
 import type { AppEnv } from '../types';
 
 function toAppError(err: unknown): AppError {
@@ -24,6 +25,7 @@ export function errorHandler(err: Error, c: Context<AppEnv>) {
       userId: c.get('user')?.id,
       error: err,
     });
+    captureError(err, { requestId: c.get('requestId'), endpoint: c.req.routePath, userId: c.get('user')?.id });
   }
   if (appError.status === 429) {
     const retry = (appError.details as { retryAfterSeconds?: number } | undefined)?.retryAfterSeconds;

@@ -1,7 +1,10 @@
 import { notFound } from '../../lib/errors';
 import { canSeeDepartment, departmentScope } from '../../lib/permissions';
 import { prisma } from '../../lib/prisma';
+import type { Semaphore, Week, WeekKpiSnapshot } from '@prisma/client';
+import { recordMetric, timed } from '../../lib/metrics';
 import type { AuthUser } from '../../types';
+import { COMPANY_KEY } from '../weeks/kpi-snapshot';
 import type { WeekData, WeekDepartment } from '../weeks/week-data';
 import { currentWeek, presentWeek, resolveWeek, weekData } from '../weeks/weeks.service';
 
@@ -106,6 +109,71 @@ async function assertVisibleArea(user: AuthUser, departmentId: string | undefine
   if (!canSeeDepartment(scope, departmentId)) throw notFound('Department');
 }
 
+
+// ─── Per-week headline numbers ──────────────────────────────────────────────
+// Closed weeks come from their KPI snapshot rows (MVP Fase 4) — a single query
+// for all of them; the open week, and any closed week without snapshot rows,
+// from weekData (live / full archive JSON). Departments respect the viewer's scope.
+
+interface Numbers {
+  index: number | null;
+  taskProgress: number | null;
+  kpiCompliance: number | null;
+  functionCompliance: number | null;
+  semaphore: Semaphore | null;
+  tasks: { total: number; done: number; overdue: number };
+}
+interface WeekNumbers {
+  mondayDate: string;
+  saturdayDate: string;
+  overall: Numbers;
+  departments: { id: string; name: string; metrics: Numbers }[];
+}
+
+const fromSnapshot = (r: WeekKpiSnapshot): Numbers => ({
+  index: r.indexValue,
+  taskProgress: r.taskProgress,
+  kpiCompliance: r.kpiCompliance,
+  functionCompliance: r.functionCompliance,
+  semaphore: r.semaphore,
+  tasks: { total: r.tasksTotal, done: r.tasksDone, overdue: r.tasksOverdue },
+});
+
+const iso = (d: Date) => d.toISOString().slice(0, 10);
+const plusDays = (day: string, n: number) => iso(new Date(new Date(`${day}T00:00:00Z`).getTime() + n * 86_400_000));
+
+async function weekNumbers(user: AuthUser, weeks: Week[]): Promise<Map<string, WeekNumbers>> {
+  const scope = await departmentScope(user);
+  const closed = weeks.filter((w) => w.status === 'ARCHIVED');
+  const rows = closed.length ? await prisma.weekKpiSnapshot.findMany({ where: { weekId: { in: closed.map((w) => w.id) } } }) : [];
+  const byWeek = new Map<string, WeekKpiSnapshot[]>();
+  for (const r of rows) byWeek.set(r.weekId, [...(byWeek.get(r.weekId) ?? []), r]);
+
+  const out = new Map<string, WeekNumbers>();
+  for (const week of weeks) {
+    const snap = byWeek.get(week.id);
+    const company = snap?.find((r) => r.departmentKey === COMPANY_KEY);
+    if (company) {
+      recordMetric('week_history_snapshot_hit');
+      const monday = iso(week.mondayDate);
+      out.set(week.id, {
+        mondayDate: monday,
+        saturdayDate: plusDays(monday, 5),
+        overall: fromSnapshot(company),
+        departments: snap!
+          .filter((r) => r.departmentKey !== COMPANY_KEY && canSeeDepartment(scope, r.departmentKey))
+          .sort((a, b) => (a.departmentName ?? '').localeCompare(b.departmentName ?? '', 'es'))
+          .map((r) => ({ id: r.departmentKey, name: r.departmentName ?? '', metrics: fromSnapshot(r) })),
+      });
+      continue;
+    }
+    if (week.status === 'ARCHIVED') recordMetric('week_history_snapshot_miss');
+    const data = await weekData(user, week);
+    out.set(week.id, { mondayDate: data.week.mondayDate, saturdayDate: data.week.saturdayDate, overall: data.overall, departments: data.departments });
+  }
+  return out;
+}
+
 // The index week by week, oldest first, ending with the current week.
 export async function trends(user: AuthUser, count: number, departmentId?: string) {
   await assertVisibleArea(user, departmentId);
@@ -116,9 +184,11 @@ export async function trends(user: AuthUser, count: number, departmentId?: strin
     take: count,
   });
 
+  const ordered = weeks.reverse();
+  const numbers = await timed('week_trends', () => weekNumbers(user, ordered));
   const points = [];
-  for (const week of weeks.reverse()) {
-    const data = await weekData(user, week);
+  for (const week of ordered) {
+    const data = numbers.get(week.id)!;
     const departments = data.departments.filter((d) => !departmentId || d.id === departmentId);
     const focus = departmentId ? (departments[0]?.metrics ?? null) : null;
     const source = focus ?? data.overall;
@@ -153,9 +223,10 @@ export async function weekHistory(user: AuthUser, opts: { limit: number; include
   });
   const weeks = [...closed.reverse(), ...(opts.includeCurrent ? [current] : [])];
 
+  const numbers = await timed('week_history', () => weekNumbers(user, weeks));
   const result = [];
   for (const week of weeks) {
-    const data = await weekData(user, week);
+    const data = numbers.get(week.id)!;
     const departments = data.departments.filter((d) => !opts.departmentId || d.id === opts.departmentId);
     const focus = opts.departmentId ? (departments[0]?.metrics ?? null) : null;
     const source = focus ?? data.overall;
@@ -164,8 +235,8 @@ export async function weekHistory(user: AuthUser, opts: { limit: number; include
       weekId: week.id,
       weekNumber: week.weekNumber,
       year: week.year,
-      mondayDate: data.week.mondayDate,
-      saturdayDate: data.week.saturdayDate,
+      mondayDate: data.mondayDate,
+      saturdayDate: data.saturdayDate,
       status: week.status,
       metrics: {
         indexGeneral: percent(source.index),
