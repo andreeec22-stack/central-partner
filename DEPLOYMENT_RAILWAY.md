@@ -3,12 +3,12 @@
 Railway **no ejecuta `docker-compose.prod.yml`**: cada contenedor es un servicio aparte.
 El proyecto queda con 4 servicios en un mismo proyecto/entorno de Railway:
 
-| Servicio   | Origen                         | Config-as-code            | Dominio público |
-|------------|--------------------------------|---------------------------|-----------------|
-| `Postgres` | plantilla de Railway           | —                         | no              |
-| `Redis`    | plantilla de Railway           | —                         | no              |
-| `api`      | este repo, `apps/api/Dockerfile` | `/apps/api/railway.toml` | no (va por `web`) |
-| `web`      | este repo, `apps/web/Dockerfile` | `/apps/web/railway.toml` | **sí**          |
+| Servicio (proyecto `ideal-vision`) | Build | Dominio público |
+|------------|--------------------------------|-----------------|
+| `Postgres` | plantilla de Railway           | no              |
+| `Redis`    | plantilla de Railway           | no              |
+| `@central-partner/api` | Dockerfile `apps/api/Dockerfile` | no (va por `web`) |
+| `@central-partner/web` | Dockerfile `apps/web/Dockerfile` | **sí** (puerto 8080) |
 
 `web` es nginx: sirve el SPA y hace de proxy same-origin a `api` por la red privada
 (`/api`, `/socket.io`, `/api/health`). Así la cookie de refresh y el websocket no
@@ -16,13 +16,15 @@ necesitan CORS ni `SameSite=None`.
 
 ## Por qué fallaba antes
 
-- **E2E/tests en el build:** sin un `Dockerfile` en la raíz, Railway usa Railpack sobre
-  el `package.json` raíz del monorepo (build de todos los workspaces, incluido
-  `apps/e2e`). Los `railway.toml` fijan `builder = "DOCKERFILE"`; las imágenes solo
-  instalan el workspace que necesitan (`apps/e2e` aporta únicamente su `package.json`
-  para que `npm ci` respete el lockfile).
-  **El config path hay que ponerlo en cada servicio**: Railway solo lee `railway.toml`
-  de la raíz por su cuenta, y aquí no hay ninguno a propósito (son dos servicios distintos).
+- **E2E/tests en el build:** con Railpack, Railway detecta el monorepo y crea un servicio
+  por workspace (incluido `@central-partner/e2e`) y construye con los scripts de npm
+  (`web` llegaba a correr `vite dev`). Los servicios usan ahora sus Dockerfiles; las
+  imágenes solo instalan el workspace que necesitan (`apps/e2e` aporta únicamente su
+  `package.json` para que `npm ci` respete el lockfile).
+- **Sin `railway.toml`:** config-as-code está deprecado en Railway (lo reemplaza
+  `.railway/railway.ts`). La configuración vive en *Settings* de cada servicio. Un
+  `startCommand` (en el panel o en un `railway.toml`) **reemplaza el `CMD` del
+  Dockerfile** y se salta las migraciones: déjalo vacío.
 - **La API no arrancaba / health check:** la API escucha en `$PORT` (Railway lo inyecta)
   y expone `GET /health` (base de datos + Redis). El `CMD` aplica `prisma migrate deploy`
   antes de escuchar; por eso `healthcheckTimeout = 120`.
@@ -33,14 +35,14 @@ necesitan CORS ni `SameSite=None`.
 
 ## Paso a paso
 
-1. **New Project → Deploy from GitHub repo** → `Central-Partner`. Railway crea un
-   servicio. Renómbralo `api`.
-2. En `api` → *Settings*:
-   - *Root Directory*: vacío (los Dockerfiles construyen desde la raíz del repo).
-   - *Config-as-code → Railway config file*: `/apps/api/railway.toml`.
-3. **+ New → GitHub repo** (mismo repo) → renómbralo `web` → *Config file*:
-   `/apps/web/railway.toml`. En *Networking → Generate Domain* (puerto `8080`, o el
-   `PORT` que pongas).
+1. **New Project → Deploy from GitHub repo**. Si Railway crea un servicio por workspace,
+   borra el de `@central-partner/e2e`.
+2. En `api` y `web` → *Settings → Build*: *Root Directory* vacío (los Dockerfiles
+   construyen desde la raíz del repo), *Dockerfile path* `apps/api/Dockerfile` /
+   `apps/web/Dockerfile`, *Build command* y *Start command* vacíos.
+   *Deploy*: healthcheck `/health` (timeout 120 s en `api`: migra antes de escuchar),
+   restart *On failure*.
+3. En `web` → *Networking → Generate Domain* (puerto `8080`).
 4. **+ New → Database → PostgreSQL** y **+ New → Database → Redis**.
 5. Variables (abajo). Railway redespliega al guardarlas.
 6. Comprueba `https://<dominio-web>/health` (nginx) y `https://<dominio-web>/api/health`
@@ -69,7 +71,7 @@ SCHEDULERS_ENABLED=true
 LOG_LEVEL=info
 ```
 
-- `PORT` fijo para que `web` pueda referenciarlo (`${{api.PORT}}`).
+- `PORT` fijo: `web` lo usa en `API_UPSTREAM` (`<private endpoint de api>.railway.internal:3001`).
 - `?family=0`: ioredis resuelve IPv4 e IPv6 (los entornos antiguos de Railway tienen red
   privada solo IPv6).
 - `SCHEDULERS_ENABLED=true` en **una sola réplica** (ciclo semanal, encuestas, purga de reportes).
@@ -85,7 +87,7 @@ LOG_LEVEL=info
 
 ```
 PORT=8080
-API_UPSTREAM=${{api.RAILWAY_PRIVATE_DOMAIN}}:${{api.PORT}}
+API_UPSTREAM=central-partnerapi.railway.internal:3001
 TRUST_EDGE_PROXY=true
 ```
 
@@ -95,7 +97,7 @@ TRUST_EDGE_PROXY=true
   y el límite de `AUTH_RATE_LIMIT_MAX` intentos/minuto sería global. En docker-compose
   queda en `false`.
 
-**Nunca** pongas secretos en `railway.toml`: está en el repo. Van en el panel de variables.
+**Nunca** pongas secretos en el repo: van en el panel de variables.
 
 ## Rollback y logs
 
